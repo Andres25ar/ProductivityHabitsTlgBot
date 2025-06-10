@@ -1,10 +1,8 @@
 
 import os
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-from telegram.ext import MessageHandler, filters
+from telegram.ext import ContextTypes, ConversationHandler
 from dotenv import load_dotenv
-from telegram.ext import ConversationHandler
 import requests
 
 # Carga la API Key de OpenWeather
