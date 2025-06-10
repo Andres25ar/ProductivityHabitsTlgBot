@@ -1,1 +1,4 @@
 python-telegram-bot==20.7
+SQLAlchemy
+python-dotenv
+requests
