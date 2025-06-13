@@ -1,11 +1,14 @@
 
 import os
+import requests
+from dotenv import load_dotenv
+
+# Importaciones específicas de python-telegram-bot que necesita este módulo
 from telegram import Update
 from telegram.ext import ContextTypes, ConversationHandler
-from dotenv import load_dotenv
-import requests
 
 # Carga la API Key de OpenWeather
+load_dotenv() #Esto permite que se cargue la constante OPENWEATHER_API_KEY
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY") 
 
 async def start_weather_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
