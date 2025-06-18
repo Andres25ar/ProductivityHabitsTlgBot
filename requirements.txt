@@ -3,3 +3,4 @@ SQLAlchemy
 python-dotenv
 requests
 hupper 
+psycopg2-binary

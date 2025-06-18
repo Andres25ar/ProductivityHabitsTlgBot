@@ -7,7 +7,6 @@ import sqlalchemy as sa
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 from dotenv import load_dotenv
 from datetime import datetime
-# ...existing code...
 
 load_dotenv()
 
@@ -32,15 +31,12 @@ class User(Base):
     tasks = relationship("Task", back_populates="user")
 
     def __init__(self, id, username, first_name, last_name=None):
-        session = SessionLocal()
         self.id = id
         self.username = username
         self.first_name = first_name
         self.last_name = last_name
-        session.add(self)
-        session.commit()
-        session.close()
 
+    @staticmethod
     def get_user(user_id):
         session = SessionLocal()
         user = session.query(User).filter(User.id == user_id).first()
@@ -54,7 +50,7 @@ class DefaultHabit(Base):
     description = sa.Column(sa.String, nullable=True)
     user_habits = relationship("UserHabit", back_populates="habit")
 
-#lista de habitos por defecto
+    @staticmethod
     def load_default_habits():
         session = SessionLocal()
         default_habits = [
@@ -83,66 +79,49 @@ class DefaultHabit(Base):
         session.commit()
         session.close()
 
-    #obtener los habitos por defecto
-    @staticmethod   #no estoy seguro si es staticmethod o classmethod
-    def get_habits(default_habit_id=None):  #Mejorar con try catch
-        session = SessionLocal()    # Obtiene una sesión de la base de datos
-        # Si se proporciona un ID de hábito por defecto, filtra por ese ID
+    @staticmethod
+    def get_habits(default_habit_id=None):
+        session = SessionLocal()
         if default_habit_id:
             habits = session.query(DefaultHabit).filter(DefaultHabit.id == default_habit_id).all()
-        # Si no se proporciona un ID, devuelve todos los hábitos por defecto
         else:
             habits = session.query(DefaultHabit).all()
         session.close()
-        return habits   
+        return habits
 
-
-#entidad que rompe relacion muchos a muchos entre usuario y habitos
 class UserHabit(Base):
     __tablename__ = "user_habits"
     id = sa.Column(sa.Integer, primary_key=True)
     user_id = sa.Column(sa.BigInteger, sa.ForeignKey("users.id"))
     habit_id = sa.Column(sa.Integer, sa.ForeignKey("default_habits.id"))
-    time = sa.Column(sa.Time, nullable=False)
-    #custom_name = sa.Column(sa.String, nullable=True)
-    #config = sa.Column(sa.JSON, nullable=True)
+    # time = sa.Column(sa.Time, nullable=False)  # Atributo time comentado, no se usará
     user = relationship("User", back_populates="habits")
     habit = relationship("DefaultHabit", back_populates="user_habits")
 
-    def __init__(self, user_id, habit_id, time):
-        session = SessionLocal()
+    def __init__(self, user_id, habit_id):  # time eliminado del constructor
         self.user_id = user_id
         self.habit_id = habit_id
-        self.time = time
-        session.commit()
-        session.close()
+        # self.time = time
 
-    #carga los habitos de cada usuario y la hora pedida por pantalla
-    def set_habit_for_user(user_id, habit_id, time):
+    @staticmethod
+    def set_habit_for_user(user_id, habit_id):  # time eliminado de los parámetros
         session = SessionLocal()
-        user_habit = UserHabit(user_id=user_id, habit_id=habit_id, time=time)
+        user_habit = UserHabit(user_id=user_id, habit_id=habit_id)
         session.add(user_habit)
         session.commit()
         session.close()
 
+    @staticmethod
     def get_user_habits(user_id):
         session = SessionLocal()
         user_habits = session.query(UserHabit).filter(UserHabit.user_id == user_id).all()
         session.close()
         return user_habits
-    
+
+    '''@staticmethod
     def change_time(user_id, habit_id, new_time):
-        session = SessionLocal()
-        user_habit = session.query(UserHabit).filter(
-            UserHabit.user_id == user_id,
-            UserHabit.habit_id == habit_id
-        ).first()
-        if user_habit:
-            user_habit.time = new_time
-            session.commit()
-        session.close()
-
-
+        # Método dejado para compatibilidad, pero no hace nada ya que time está comentado
+        pass'''
 
 class Task(Base):
     __tablename__ = "tasks"
@@ -154,32 +133,28 @@ class Task(Base):
     completed = sa.Column(sa.Boolean, default=False)
     user = relationship("User", back_populates="tasks")
 
-    #consultar si debe ser estatico o no
     def __init__(self, user_id, description, due_date=None, time=None):
-        session = SessionLocal()
         self.user_id = user_id
         self.description = description
         self.due_date = due_date if due_date else datetime.now().date()
         self.time = time if time else datetime.now().time()
-        session.commit()
-        session.close()
 
-
-    #cargar una tarea para un usuario
-    #@staticmethod
-    def set_task(user_id, description, due_date=None):
+    @staticmethod
+    def set_task(user_id, description, due_date=None, due_time=None):
         session = SessionLocal()
-        task = Task(user_id=user_id, description=description, due_date=due_date)
+        task = Task(user_id=user_id, description=description, due_date=due_date, time=due_time)
         session.add(task)
         session.commit()
         session.close()
 
+    @staticmethod
     def get_task(task_id):
         session = SessionLocal()
         task = session.query(Task).filter(Task.id == task_id).first()
         session.close()
         return task
 
+    @staticmethod
     def get_task_to_time(user_id, time):
         session = SessionLocal()
         tasks = session.query(Task).filter(
@@ -189,12 +164,14 @@ class Task(Base):
         session.close()
         return tasks
 
+    @staticmethod
     def get_user_tasks(user_id):
         session = SessionLocal()
         tasks = session.query(Task).filter(Task.user_id == user_id).all()
         session.close()
         return tasks
 
+    @staticmethod
     def get_incomplete_tasks(user_id):
         session = SessionLocal()
         tasks = session.query(Task).filter(
@@ -204,6 +181,7 @@ class Task(Base):
         session.close()
         return tasks
 
+    @staticmethod
     def get_completed_tasks(user_id):
         session = SessionLocal()
         tasks = session.query(Task).filter(
@@ -213,6 +191,7 @@ class Task(Base):
         session.close()
         return tasks
 
+    @staticmethod
     def mark_as_completed(task_id):
         session = SessionLocal()
         task = session.query(Task).filter(Task.id == task_id).first()
