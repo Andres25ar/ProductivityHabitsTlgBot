@@ -1,207 +1,355 @@
 # src/utils/scheduler.py
 
-import logging
-from datetime import datetime, time, timedelta
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError # Para validar y usar zonas horarias
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.date import DateTrigger
-from apscheduler.triggers.interval import IntervalTrigger
-from apscheduler.triggers.cron import CronTrigger
 import asyncio
+import datetime
+import os
+import logging
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-# Importar las funciones de interacción de la base de datos con los nombres correctos
-from src.database.database_interation import get_task, get_user_by_telegram_id, complete_task_by_id, get_all_incomplete_tasks
-from src.database.db_context import get_db
+from telegram import Bot
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, joinedload
+from dotenv import load_dotenv
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+from apscheduler.executors.asyncio import AsyncIOExecutor
+from apscheduler.triggers.date import DateTrigger
+from apscheduler.triggers.cron import CronTrigger
+
+from src.database.db_context import AsyncSessionLocal, get_db
+from src.database.database_interation import get_task_by_id, get_user_by_telegram_id, mark_as_completed
+from src.database.models import UserTask, User
+import sqlalchemy as sa
+from sqlalchemy import select
+
+load_dotenv()
+
+# --- Configuración del Logger ---
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
-_scheduler = None # Variable global para mantener la instancia del scheduler
+if not logger.handlers:
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
 
-def setup_scheduler() -> AsyncIOScheduler:
-    """
-    Configura e inicia el APScheduler.
-    Retorna la instancia del scheduler.
-    """
-    global _scheduler
-    if _scheduler is None:
-        _scheduler = AsyncIOScheduler()
-        _scheduler.start()
-        logger.info("APScheduler iniciado.")
-    return _scheduler
+    file_handler = logging.FileHandler('scheduler.log')
+    file_handler.setLevel(logging.DEBUG)
 
-def get_scheduler() -> AsyncIOScheduler:
-    """
-    Retorna la instancia global del APScheduler.
-    Asegúrate de llamar a setup_scheduler() primero.
-    """
-    if _scheduler is None:
-        raise RuntimeError("El scheduler no ha sido configurado. Llama a setup_scheduler() primero.")
-    return _scheduler
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    console_handler.setFormatter(formatter)
+    file_handler.setFormatter(formatter)
+
+    logger.addHandler(console_handler)
+    logger.addHandler(file_handler)
 
 
-async def send_task_reminder(task_id: int):
-    """
-    Función que el scheduler ejecuta para enviar recordatorios de tareas.
-    """
-    from src.bot.productivity_habits_bot import application # Importación local para evitar circularidad
-    
-    logger.info(f"Intentando enviar recordatorio para la tarea ID: {task_id}")
+# --- Variables de Entorno ---
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+
+SQLALCHEMY_JOBSTORE_DATABASE_URL = os.getenv("DATABASE_URL").replace("+asyncpg", "")
+
+if not TELEGRAM_BOT_TOKEN:
+    logger.warning("Advertencia: TELEGRAM_BOT_TOKEN no está configurado en scheduler.py. Esto podría causar fallos al enviar mensajes.")
+if not SQLALCHEMY_JOBSTORE_DATABASE_URL:
+    logger.critical("Error: SQLALCHEMY_JOBSTORE_DATABASE_URL no está configurada en scheduler.py. El scheduler persistente no funcionará.")
+    raise ValueError("SQLALCHEMY_JOBSTORE_DATABASE_URL must be set for the persistent scheduler.")
+
+
+# --- Instancia de APScheduler (se configura y se inicia externamente) ---
+persistent_scheduler = AsyncIOScheduler()
+
+def setup_scheduler():
+    global scheduler
+    scheduler = persistent_scheduler
+
     try:
-        async with get_db() as db:
-            task = await get_task(db, task_id)
-            if not task:
-                logger.warning(f"Recordatorio para tarea ID {task_id} cancelado: tarea no encontrada en la DB.")
-                # Eliminar el job si la tarea no existe
-                scheduler = get_scheduler()
-                if scheduler.get_job(f"instant_reminder_{task_id}"):
-                    scheduler.remove_job(f"instant_reminder_{task_id}")
-                    logger.info(f"Job instantáneo {task_id} eliminado del scheduler.")
-                # También eliminar trabajos recurrentes si los hay
-                jobs_to_remove = [job.id for job in list(scheduler.get_jobs()) if job.id and job.id.startswith(f"recurring_task_{task_id}")]
-                for job_id_rec in jobs_to_remove:
-                    scheduler.remove_job(job_id_rec)
-                    logger.info(f"Job recurrente {job_id_rec} eliminado del scheduler.")
-                return
+        salta_timezone = ZoneInfo('America/Argentina/Salta')
 
-            if task.completed and not task.frequency: # Si es tarea de una vez y ya completada
-                logger.info(f"Recordatorio para tarea ID {task_id} no enviado: tarea ya completada y no recurrente.")
-                scheduler = get_scheduler()
-                if scheduler.get_job(f"instant_reminder_{task_id}"):
-                    scheduler.remove_job(f"instant_reminder_{task_id}")
-                    logger.info(f"Job instantáneo {task_id} eliminado del scheduler.")
-                return
+        scheduler.configure(
+            jobstores={
+                "default": {
+                    'type': 'sqlalchemy',
+                    'url': SQLALCHEMY_JOBSTORE_DATABASE_URL
+                }
+            },
+            executors={
+                'default': AsyncIOExecutor()
+            },
+            job_defaults={
+                'coalesce': False,
+                'max_instances': 1
+            },
+            timezone=salta_timezone
+        )
+        logger.info("APScheduler persistente configurado exitosamente.")
 
-            user = await get_user_by_telegram_id(db, task.user.telegram_id)
-            if not user or not user.telegram_id:
-                logger.warning(f"Recordatorio para tarea ID {task_id} no enviado: usuario {task.user.telegram_id} no encontrado.")
-                return
-            
-            # Obtener la instancia del bot para enviar el mensaje
-            if application and application.bot:
-                # Determinar la zona horaria del usuario para el recordatorio
-                user_tz_str = user.timezone if user.timezone else 'UTC'
-                try:
-                    user_tz = ZoneInfo(user_tz_str)
-                except ZoneInfoNotFoundError:
-                    logger.warning(f"Zona horaria '{user_tz_str}' no válida para usuario {user.telegram_id}. Usando UTC para recordatorio.")
-                    user_tz = ZoneInfo('UTC')
+        if not scheduler.running:
+            scheduler.start()
+            logger.info("APScheduler persistente iniciado.")
+        
+        return scheduler
 
-                # Formatear la fecha de vencimiento en la zona horaria del usuario si existe
-                display_due_date = ""
-                if task.due_date:
-                    due_date_in_user_tz = task.due_date.astimezone(user_tz)
-                    display_due_date = f" (Vence: {due_date_in_user_tz.strftime('%H:%M del %d-%m-%Y %Z')})"
-
-                await application.bot.send_message(
-                    chat_id=user.telegram_id,
-                    text=f"⏰ ¡Recordatorio de tarea! Tienes pendiente: `{task.description}`{display_due_date}"
-                )
-                logger.info(f"Recordatorio enviado para la tarea ID {task_id} a {user.telegram_id}.")
-                
-                # Para tareas recurrentes, marcarlas como no completadas para el próximo ciclo
-                if task.frequency and task.frequency != 'una_vez':
-                    # Esto simula un "reset" para el siguiente ciclo.
-                    # No es un "complete", es para que vuelva a ser considerada pendiente.
-                    # No usamos complete_task_by_id aquí, ya que queremos que permanezca incompleta para el próximo ciclo.
-                    logger.info(f"Tarea recurrente {task_id} recordada, no se marca como completada.")
-
-            else:
-                logger.error("La instancia de 'application' o 'application.bot' no está disponible para enviar el mensaje.")
     except Exception as e:
-        logger.error(f"Error al enviar recordatorio para la tarea ID {task_id}: {e}", exc_info=True)
+        logger.critical(f"Error al configurar o iniciar APScheduler persistente: {e}", exc_info=True)
+        raise
 
 
-async def schedule_instant_reminder(task_id: int):
-    """
-    Programa un recordatorio único para una tarea.
-    """
-    scheduler = get_scheduler()
-    async with get_db() as db:
-        task = await get_task(db, task_id)
-        if task and task.due_date and not task.completed:
-            job_id = f"instant_reminder_{task.id}"
-            scheduler.add_job(
-                send_task_reminder,
-                DateTrigger(run_date=task.due_date),
-                args=[task.id],
-                id=job_id,
-                replace_existing=True # Reemplazar si ya existe un job con este ID
-            )
-            logger.info(f"Recordatorio instantáneo para la tarea {task.id} programado para {task.due_date}.")
-        else:
-            logger.warning(f"No se pudo programar recordatorio instantáneo para la tarea {task_id}: no encontrada, sin fecha de vencimiento o ya completada.")
+def get_scheduler():
+    if not persistent_scheduler.running:
+        logger.warning("Intentando obtener el scheduler pero no está en ejecución. Asegúrate de llamar setup_scheduler() primero.")
+    return persistent_scheduler
 
 
-async def schedule_recurring_task(task_id: int, frequency: str):
-    """
-    Programa un recordatorio recurrente para una tarea.
-    """
-    scheduler = get_scheduler()
-    async with get_db() as db:
-        task = await get_task(db, task_id)
-        if task and task.due_date:
-            job_id = f"recurring_task_{task.id}"
-            # Asegurar que el due_date esté en la zona horaria del usuario para la programación recurrente
-            user = await get_user_by_telegram_id(db, task.user.telegram_id)
-            user_tz = ZoneInfo(user.timezone if user.timezone else 'UTC')
-            
-            # Convertir la due_date de UTC a la zona horaria del usuario para la programación con cron
-            local_due_date = task.due_date.astimezone(user_tz)
+# --- Funciones de recordatorio para APScheduler ---
 
-            if frequency == 'diaria':
-                # Ejecutar diariamente a la misma hora (en la zona horaria del usuario)
-                trigger = CronTrigger(hour=local_due_date.hour, minute=local_due_date.minute, timezone=user_tz)
-            elif frequency == 'semanal':
-                # Ejecutar semanalmente el mismo día de la semana y a la misma hora
-                trigger = CronTrigger(day_of_week=local_due_date.weekday(), hour=local_due_date.hour, minute=local_due_date.minute, timezone=user_tz)
-            elif frequency == 'mensual':
-                # Ejecutar mensualmente el mismo día del mes y a la misma hora
-                trigger = CronTrigger(day=local_due_date.day, hour=local_due_date.hour, minute=local_due_date.minute, timezone=user_tz)
-            elif frequency == 'anual':
-                # Ejecutar anualmente el mismo mes, día del mes y a la misma hora
-                trigger = CronTrigger(month=local_due_date.month, day=local_due_date.day, hour=local_due_date.hour, minute=local_due_date.minute, timezone=user_tz)
-            else:
-                logger.warning(f"Frecuencia '{frequency}' no reconocida para la tarea recurrente {task.id}. No se programó.")
-                return
+async def send_reminder(bot_token: str, chat_id: int, message: str, task_id: int = None):
+    """Envía un recordatorio de una tarea al usuario."""
+    bot = Bot(token=bot_token)
+    try:
+        await bot.send_message(chat_id=chat_id, text=message)
+        logger.info(f"Recordatorio enviado a {chat_id}: {message}")
 
-            scheduler.add_job(
-                send_task_reminder,
-                trigger,
-                args=[task.id],
-                id=job_id,
-                replace_existing=True
-            )
-            logger.info(f"Recordatorio recurrente para la tarea {task.id} (frecuencia: {frequency}) programado.")
-        else:
-            logger.warning(f"No se pudo programar recordatorio recurrente para la tarea {task_id}: no encontrada o sin fecha de vencimiento.")
+        if task_id:
+            async with get_db() as db:
+                task = await get_task_by_id(db, task_id)
+
+                if task and (task.frequency is None or task.frequency == 'una vez'):
+                    await mark_as_completed(db, task_id)
+                    logger.info(f"Tarea única {task_id} marcada como completada después de enviar recordatorio.")
+                    job_id_prefix_once = f"instant_reminder_{task_id}"
+                    
+                    for job in list(persistent_scheduler.get_jobs()): 
+                        if job.id and job.id.startswith(job_id_prefix_once):
+                            try:
+                                persistent_scheduler.remove_job(job.id)
+                                logger.info(f"Job APScheduler persistente para tarea única {job.id} eliminado después de completarse.")
+                            except Exception as e:
+                                logger.error(f"Error al eliminar job {job.id} del scheduler persistente: {e}", exc_info=True)
+                elif task and task.frequency != 'una vez':
+                    logger.debug(f"Tarea recurrente {task_id} no marcada como completada automáticamente.")
+                else:
+                    logger.warning(f"Tarea {task_id} no encontrada o ya procesada al intentar marcar como completada.")
+    except Exception as e:
+        logger.error(f"Error al enviar el recordatorio al chat {chat_id}: {e}", exc_info=True)
+    # ELIMINADA LA LÍNEA: finally: await bot.session.close()
+
 
 async def schedule_all_due_tasks_for_persistence():
     """
-    Carga todas las tareas pendientes de la base de datos y las programa en el scheduler.
-    Esto se ejecuta al inicio del bot para persistir los recordatorios entre reinicios.
+    Carga todas las tareas pendientes de la base de datos y las programa
+    en el scheduler persistente (APScheduler).
+    Se ejecuta al inicio del bot para restaurar los jobs.
     """
-    scheduler = get_scheduler()
-    logger.info("Programando todas las tareas pendientes al inicio...")
-    try:
-        async with get_db() as db:
-            # Obtener todas las tareas incompletas de la base de datos
-            all_incomplete_tasks = await get_all_incomplete_tasks(db) 
-            
-            for task in all_incomplete_tasks:
-                if task.due_date: # Solo programar si tiene fecha de vencimiento
-                    if task.frequency in [None, 'una_vez']:
-                        # Asegurarse de que el job no se programe para el pasado
-                        if task.due_date > datetime.now(task.due_date.tzinfo):
-                            await schedule_instant_reminder(task.id)
-                        else:
-                            logger.info(f"Tarea instantánea {task.id} vencida y no completada. No se programa recordatorio.")
-                    elif task.frequency in ['diaria', 'semanal', 'mensual', 'anual']:
-                        await schedule_recurring_task(task.id, task.frequency)
-                    else:
-                        logger.warning(f"Tarea {task.id} con frecuencia '{task.frequency}' no reconocida. No se programó.")
-                else:
-                    logger.info(f"Tarea {task.id} sin fecha de vencimiento, no se programó recordatorio.")
-            logger.info(f"Total de {len(all_incomplete_tasks)} tareas incompletas procesadas para programación al inicio.")
-    except Exception as e:
-        logger.error(f"Error al programar tareas persistentes al inicio: {e}", exc_info=True)
+    logger.info("Cargando y programando tareas pendientes en el scheduler persistente...")
+    if not persistent_scheduler.running:
+        logger.warning("Scheduler no está en ejecución. No se pueden programar tareas pendientes.")
+        return
 
+    logger.info("Limpiando todos los jobs existentes del scheduler para asegurar un estado limpio...")
+    for job in persistent_scheduler.get_jobs():
+        try:
+            persistent_scheduler.remove_job(job.id)
+            logger.info(f"Job {job.id} eliminado durante la limpieza inicial.")
+        except Exception as e:
+            logger.error(f"Error al intentar eliminar el job {job.id} durante la limpieza inicial: {e}", exc_info=True)
+
+    async with get_db() as db:
+        now_aware_scheduler_tz = datetime.datetime.now(persistent_scheduler.timezone)
+
+        result = await db.execute(
+            select(UserTask)
+            .options(joinedload(UserTask.user))
+            .filter(
+                UserTask.completed == False,
+                UserTask.due_date != None,
+                UserTask.due_date > now_aware_scheduler_tz.astimezone(ZoneInfo('UTC')),
+                (UserTask.frequency == 'una vez') | (UserTask.frequency == None)
+            )
+        )
+        tasks_to_schedule = result.scalars().all()
+
+        logger.info(f"Se encontraron {len(tasks_to_schedule)} tareas únicas pendientes para programar.")
+        for task in tasks_to_schedule:
+            if task.user and task.user.telegram_id:
+                await schedule_instant_reminder(task.id)
+            else:
+                logger.warning(f"No se pudo programar recordatorio para tarea única {task.id}: Usuario o Telegram ID no encontrado.")
+
+        result = await db.execute(
+            select(UserTask)
+            .options(joinedload(UserTask.user))
+            .filter(
+                UserTask.completed == False,
+                UserTask.due_date != None,
+                UserTask.frequency.in_(['diaria', 'semanal', 'mensual', 'anual'])
+            )
+        )
+        recurring_tasks = result.scalars().all()
+
+        logger.info(f"Se encontraron {len(recurring_tasks)} tareas recurrentes pendientes para programar.")
+        for task in recurring_tasks:
+            if task.user and task.user.telegram_id:
+                await schedule_recurring_task(task.id, task.frequency)
+            else:
+                logger.warning(f"No se pudo programar recordatorio para tarea recurrente {task.id}: Usuario o Telegram ID no encontrado.")
+
+
+async def schedule_instant_reminder(task_id: int):
+    logger.debug(f"Intentando programar recordatorio instantáneo para la tarea {task_id} en scheduler persistente...")
+
+    async with get_db() as db:
+        task = await get_task_by_id(db, task_id)
+
+        if task and task.due_date and task.user and task.user.telegram_id:
+            task_due_datetime_utc_aware = task.due_date
+
+            run_date_in_scheduler_tz = task_due_datetime_utc_aware.astimezone(persistent_scheduler.timezone)
+
+            now_in_scheduler_tz = datetime.datetime.now(persistent_scheduler.timezone)
+
+            if run_date_in_scheduler_tz <= now_in_scheduler_tz:
+                logger.debug(f"La fecha de recordatorio para la tarea {task.id} ya pasó ({run_date_in_scheduler_tz}), omitiendo programación.")
+                return
+
+            chat_id = task.user.telegram_id
+            label = "Recordatorio"
+            notify_time = run_date_in_scheduler_tz
+
+            display_due_date = task_due_datetime_utc_aware
+            time_str = "N/A"
+            if task.user.timezone:
+                try:
+                    user_tz = ZoneInfo(task.user.timezone)
+                    display_due_date = display_due_date.astimezone(user_tz)
+                    time_str = display_due_date.strftime('%Y-%m-%d %H:%M %Z')
+                except ZoneInfoNotFoundError:
+                    logger.error(f"Zona horaria '{task.user.timezone}' no válida para el usuario {task.user.telegram_id}. Usando UTC.")
+                    time_str = display_due_date.strftime('%Y-%m-%d %H:%M UTC')
+                except Exception as e:
+                    logger.error(f"Error al formatear TZ de usuario {task.user.timezone} para tarea {task.id}: {e}", exc_info=True)
+                    time_str = display_due_date.strftime('%Y-%m-%d %H:%M UTC')
+            else:
+                time_str = display_due_date.strftime('%Y-%m-%d %H:%M UTC')
+
+            message = f"⏰ {label}: ¡Es hora de '{task.description}'!\nProgramada para: {time_str}."
+            job_id = f"instant_reminder_{task.id}"
+
+            if persistent_scheduler.get_job(job_id):
+                persistent_scheduler.remove_job(job_id)
+                logger.info(f"Eliminado job persistente existente: {job_id}")
+
+            try:
+                persistent_scheduler.add_job(
+                    send_reminder,
+                    DateTrigger(run_date=notify_time),
+                    args=[TELEGRAM_BOT_TOKEN, chat_id, message, task.id],
+                    id=job_id,
+                    replace_existing=True,
+                    misfire_grace_time=3600
+                )
+                job = persistent_scheduler.get_job(job_id)
+                if job and job.next_run_time:
+                    next_run_time_str = job.next_run_time.strftime('%Y-%m-%d %H:%M:%S %Z%z')
+                else:
+                    next_run_time_str = "N/A"
+                logger.info(f"Recordatorio único programado en scheduler persistente: '{label}' para la tarea {task.id} (usuario {chat_id}) a las {notify_time.strftime('%Y-%m-%d %H:%M:%S %Z')}. Próximo disparo: {next_run_time_str}")
+            except Exception as e:
+                logger.error(f"Error al añadir job instantáneo {job_id} al scheduler: {e}", exc_info=True)
+        else:
+            logger.warning(f"No se encontró la tarea {task_id}, no tiene fecha de vencimiento, o el usuario/telegram_id no está asociado/disponible para programar recordatorio instantáneo.")
+    logger.debug(f"DEBUG: async with block exited successfully for instant reminder task {task_id}.")
+
+async def schedule_recurring_task(task_id: int, frequency: str):
+    logger.debug(f"Intentando programar recordatorio recurrente para la tarea {task_id} con frecuencia '{frequency}' en scheduler persistente...")
+
+    async with get_db() as db:
+        task = await get_task_by_id(db, task_id)
+
+        if task and task.due_date and task.user and task.user.telegram_id:
+            chat_id = task.user.telegram_id
+            
+            task_due_datetime_utc_aware = task.due_date
+
+            display_due_date = task_due_datetime_utc_aware
+            time_str = "N/A"
+            if task.user.timezone:
+                try:
+                    user_tz = ZoneInfo(task.user.timezone)
+                    display_due_date = display_due_date.astimezone(user_tz)
+                    time_str = display_due_date.strftime('%Y-%m-%d %H:%M %Z')
+                except ZoneInfoNotFoundError:
+                    logger.error(f"Zona horaria '{task.user.timezone}' no válida para el usuario {task.user.telegram_id}. Usando UTC.")
+                    time_str = display_due_date.strftime('%Y-%m-%d %H:%M UTC')
+                except Exception as e:
+                    logger.error(f"Error al formatear TZ de usuario {task.user.timezone} para tarea {task.id}: {e}", exc_info=True)
+                    time_str = display_due_date.strftime('%Y-%m-%d %H:%M UTC')
+            else:
+                time_str = display_due_date.strftime('%Y-%m-%d %H:%M UTC')
+
+            message = f"🔔 Recordatorio recurrente: ¡Es hora de '{task.description}'!\nProgramada para: {time_str}."
+
+            start_date_in_scheduler_tz = task_due_datetime_utc_aware.astimezone(persistent_scheduler.timezone)
+
+            job_id_prefix = f"recurring_task_{task.id}"
+
+            trigger_type = CronTrigger
+            trigger_kwargs = {
+                'hour': start_date_in_scheduler_tz.hour,
+                'minute': start_date_in_scheduler_tz.minute,
+                'second': start_date_in_scheduler_tz.second,
+                'timezone': persistent_scheduler.timezone
+            }
+            logger.debug(f"DEBUG: CronTrigger kwargs antes de añadir job: {trigger_kwargs}")
+
+            if frequency == 'diaria':
+                pass
+            elif frequency == 'semanal':
+                trigger_kwargs['day_of_week'] = start_date_in_scheduler_tz.weekday()
+            elif frequency == 'mensual':
+                trigger_kwargs['day'] = start_date_in_scheduler_tz.day
+            elif frequency == 'anual':
+                trigger_kwargs['month'] = start_date_in_scheduler_tz.month
+                trigger_kwargs['day'] = start_date_in_scheduler_tz.day
+            else:
+                logger.error(f"Frecuencia '{frequency}' no soportada para programación recurrente para la tarea {task.id}.")
+                return
+
+            now_in_scheduler_tz = datetime.datetime.now(persistent_scheduler.timezone)
+            
+            if start_date_in_scheduler_tz > now_in_scheduler_tz:
+                trigger_kwargs['start_date'] = start_date_in_scheduler_tz
+                logger.debug(f"Configurando start_date para el trigger recurrente: {start_date_in_scheduler_tz}")
+            else:
+                logger.debug(f"La fecha de inicio para la tarea recurrente {task.id} ({start_date_in_scheduler_tz}) ya pasó o es ahora. El trigger comenzará en la próxima ocurrencia basada en el patrón cron.")
+
+            logger.debug(f"DEBUG: CronTrigger final kwargs antes de añadir job: {trigger_kwargs}")
+
+            for existing_job in list(persistent_scheduler.get_jobs()):
+                if existing_job.id and existing_job.id.startswith(job_id_prefix):
+                    persistent_scheduler.remove_job(existing_job.id)
+                    logger.info(f"Eliminado job recurrente existente del scheduler persistente: {existing_job.id}")
+
+            job_id = f"{job_id_prefix}_{frequency}"
+
+            try:
+                persistent_scheduler.add_job(
+                    send_reminder,
+                    trigger=trigger_type(**trigger_kwargs),
+                    args=[TELEGRAM_BOT_TOKEN, chat_id, message, None],
+                    id=job_id,
+                    replace_existing=True,
+                    misfire_grace_time=3600
+                )
+                job = persistent_scheduler.get_job(job_id)
+                if job and job.next_run_time:
+                    next_run_time_str = job.next_run_time.strftime('%Y-%m-%d %H:%M:%S %Z%z')
+                else:
+                    next_run_time_str = "N/A"
+                logger.info(f"Recordatorio recurrente programado en scheduler persistente: '{task.description}' (ID: {task.id}) para el usuario {chat_id} con frecuencia '{frequency}'. Próximo disparo: {next_run_time_str}")
+            except Exception as e:
+                logger.error(f"Error al añadir job recurrente {job_id} al scheduler: {e}", exc_info=True)
+        else:
+            logger.warning(f"No se pudo programar el recordatorio recurrente para la tarea {task.id}: no encontrado, sin fecha, o el usuario/telegram_id no disponible.")
+    logger.debug(f"DEBUG: async with block exited successfully for recurring task {task_id}.")
