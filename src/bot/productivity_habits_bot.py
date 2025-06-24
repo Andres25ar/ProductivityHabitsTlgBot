@@ -15,13 +15,14 @@ from src.database.database_interation import (
     load_default_habits, set_task, get_incomplete_tasks, mark_as_completed,
     delete_task_by_id, complete_task_by_id, update_user_timezone, get_user_tasks
 )
-from src.database.db_context import get_db, init_db_async
+from src.database.db_context import get_db, init_db_async 
 from src.utils.scheduler import (
     setup_scheduler, get_scheduler, schedule_instant_reminder,
     schedule_recurring_task, schedule_all_due_tasks_for_persistence
 )
 from src.utils.logger_config import configure_logging
-from src.handlers.set_timezone_handler import setup_set_timezone_handler
+# Importar la nueva función para obtener el ConversationHandler del set_timezone
+from src.handlers.set_timezone_handler import get_set_timezone_conversation_handler
 from src.handlers.weather_handler import get_weather_conversation_handler # Importar el handler de clima
 
 configure_logging()
@@ -70,14 +71,13 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.message.reply_text("Aquí están los comandos disponibles:\n"
                                      "/start - Inicia el bot\n"
                                      "/help - Muestra esta ayuda\n"
-                                     "/set_timezone - Configura tu zona horaria\n"
+                                     "/set_timezone - Configura tu zona horaria (interactivo)\n" # Mensaje actualizado
                                      "/new_task - Crea una nueva tarea\n"
                                      "/list_tasks - Lista tus tareas incompletas\n"
                                      "/complete_task - Marca una tarea como completada\n"
                                      "/delete_task - Elimina una tarea\n"
-                                     "/clima - Consulta el clima de una ciudad\n" # Añadido a la ayuda
-                                     "/cancel - Cancela cualquier operación en curso")
-
+                                     "/clima - Consulta el clima de una ciudad\n"
+                                     "/cancelar - Cancela cualquier operación en curso") # Cambiado a /cancelar
 
 async def new_task_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text('Por favor, ingresa la descripción de tu nueva tarea:')
@@ -260,7 +260,7 @@ async def confirm_complete_task(update: Update, context: ContextTypes.DEFAULT_TY
             
             if success:
                 await update.message.reply_text(f"Tarea {task_id} marcada como completada exitosamente. ¡Felicidades!")
-                logger.info(f"Tarea {task.id} marcada como completada por el usuario {user_id}.")
+                logger.info(f"Tarea {task_id} marcada como completada por el usuario {user_id}.")
             else:
                 await update.message.reply_text(f"No se pudo encontrar la tarea con ID {task_id} o ya estaba completada.")
                 logger.warning(f"Intento de marcar como completada tarea {task_id} fallido por usuario {user_id}.")
@@ -325,7 +325,7 @@ async def confirm_delete_task(update: Update, context: ContextTypes.DEFAULT_TYPE
                     logger.info(f"Job recurrente {job_id_rec} eliminado del scheduler tras eliminar la tarea {task_id}.")
 
                 await update.message.reply_text(f"Tarea {task_id} eliminada exitosamente.")
-                logger.info(f"Tarea {task.id} eliminada por el usuario {user_id}.")
+                logger.info(f"Tarea {task_id} eliminada por el usuario {user_id}.")
             else:
                 await update.message.reply_text(f"No se pudo encontrar la tarea con ID {task_id}.")
                 logger.warning(f"Intento de eliminar tarea {task_id} fallido por usuario {user_id}.")
@@ -356,9 +356,10 @@ def main() -> None:
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
 
-    setup_set_timezone_handler(application)
+    # Reemplazar la llamada a setup_set_timezone_handler con el nuevo ConversationHandler
+    application.add_handler(get_set_timezone_conversation_handler())
 
-    # Añadir el ConversationHandler para el clima
+    # Añade el ConversationHandler para el clima
     application.add_handler(get_weather_conversation_handler())
 
     new_task_conv_handler = ConversationHandler(
@@ -368,7 +369,7 @@ def main() -> None:
             TASK_DUE_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, received_task_due_date)],
             TASK_FREQUENCY: [MessageHandler(filters.TEXT & ~filters.COMMAND, received_task_frequency)],
         },
-        fallbacks=[CommandHandler('cancel', cancel_command)],
+        fallbacks=[CommandHandler('cancelar', cancel_command)], # Usar /cancelar aquí también
     )
     application.add_handler(new_task_conv_handler)
 
@@ -379,7 +380,7 @@ def main() -> None:
         states={
             COMPLETE_TASK_SELECT_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_complete_task)],
         },
-        fallbacks=[CommandHandler('cancel', cancel_command)],
+        fallbacks=[CommandHandler('cancelar', cancel_command)], # Usar /cancelar aquí también
     )
     application.add_handler(complete_task_conv_handler)
 
@@ -388,7 +389,7 @@ def main() -> None:
         states={
             DELETE_TASK_SELECT_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_delete_task)],
         },
-        fallbacks=[CommandHandler('cancel', cancel_command)],
+        fallbacks=[CommandHandler('cancelar', cancel_command)], # Usar /cancelar aquí también
     )
     application.add_handler(delete_task_conv_handler)
 

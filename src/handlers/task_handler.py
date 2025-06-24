@@ -10,7 +10,7 @@ from telegram.ext import ContextTypes, MessageHandler, filters, CommandHandler, 
 
 from src.database.db_context import get_db # Importa get_db desde db_context
 from src.database.database_interation import (
-    get_user, add_task, get_tasks_by_user, complete_task, delete_task, get_user_tasks
+    get_user_by_telegram_id, set_task, get_incomplete_tasks, complete_task_by_id, delete_task_by_id, get_user_tasks
 ) # Asegúrate de que estas funciones existan en database_interation.py
 from src.utils.scheduler import (
     get_scheduler, schedule_instant_reminder, schedule_recurring_task
@@ -19,8 +19,9 @@ from src.utils.scheduler import (
 logger = logging.getLogger(__name__)
 
 # Estados para el manejo de conversación de tareas
+# Asegúrate de que estos rangos no colisionen si tienes otros ConversationHandlers
 TASK_DESCRIPTION, TASK_DUE_DATE, TASK_FREQUENCY = range(3)
-COMPLETE_TASK_SELECT_ID, DELETE_TASK_SELECT_ID = range(3, 5) # Asegurarse de que sean únicos de los otros ConversationHandlers
+COMPLETE_TASK_SELECT_ID, DELETE_TASK_SELECT_ID = range(3, 5)
 
 
 # --- Handlers de Tareas ---
@@ -28,13 +29,19 @@ COMPLETE_TASK_SELECT_ID, DELETE_TASK_SELECT_ID = range(3, 5) # Asegurarse de que
 # NEW_TASK CONVERSATION
 async def new_task_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Inicia la conversación para crear una nueva tarea."""
+    if not update.effective_chat:
+        logger.error(f"No se recibió un objeto de chat válido para el usuario {update.effective_user.id} en /new_task. No se puede responder.")
+        return ConversationHandler.END
     await update.message.reply_text('Por favor, ingresa la descripción de tu nueva tarea:')
     return TASK_DESCRIPTION
 
 async def received_task_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Recibe la descripción de la tarea y pide la fecha de vencimiento."""
+    if not update.effective_chat:
+        logger.error(f"No se recibió un objeto de chat válido para el usuario {update.effective_user.id} al recibir descripción. No se puede responder.")
+        return ConversationHandler.END
     context.user_data['current_task_description'] = update.message.text
-    await update.message.reply_text('¿Para cuándo es la tarea? (Ej: "mañana a las 9am", "25/12/2025", "hoy 18:00", "Lunes", "en 3 días" o "sin fecha"). Si no aplica, escribe "ninguna":')
+    await update.message.reply_text('¿Para cuándo es la tarea? (Ej: "mañana a las 9am", "25/12/2025", "hoy 18:00", "Lunes", "en 3 días" o "sin fecha"). Si no aplica, escribe "ninguna"):')
     return TASK_DUE_DATE
 
 async def received_task_due_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -43,8 +50,13 @@ async def received_task_due_date(update: Update, context: ContextTypes.DEFAULT_T
     parsed_due_date = None
     user_id = update.effective_user.id
 
-    with get_db() as db:
-        user = get_user(db, user_id)
+    if not update.effective_chat:
+        logger.error(f"No se recibió un objeto de chat válido para el usuario {user_id} al recibir fecha de vencimiento. No se puede responder.")
+        return ConversationHandler.END
+
+    # Usar async with para el context manager de la base de datos
+    async with get_db() as db:
+        user = await get_user_by_telegram_id(db, user_id) # Llamada asíncrona
         if not user or not user.timezone:
             await update.message.reply_text(
                 "Por favor, configura tu zona horaria con /set_timezone antes de añadir tareas con fecha. "
@@ -95,6 +107,10 @@ async def received_task_frequency(update: Update, context: ContextTypes.DEFAULT_
     frequency_str = update.message.text.lower().strip()
     frequency = None
     
+    if not update.effective_chat:
+        logger.error(f"No se recibió un objeto de chat válido para el usuario {update.effective_user.id} al recibir frecuencia. No se puede responder.")
+        return ConversationHandler.END
+
     valid_frequencies = ["ninguna", "diaria", "semanal", "mensual", "anual"]
     if frequency_str not in valid_frequencies:
         await update.message.reply_text(f'Frecuencia no reconocida. Por favor, usa una de las siguientes: {", ".join(valid_frequencies)}.')
@@ -108,17 +124,19 @@ async def received_task_frequency(update: Update, context: ContextTypes.DEFAULT_
     due_date = context.user_data['current_task_due_date']
 
     try:
-        with get_db() as db:
-            task = add_task(db, user_id, description, due_date, frequency)
+        async with get_db() as db: # Usar async with
+            task = await set_task(db, user_id, description, due_date, frequency) # Llamada asíncrona
         
         await update.message.reply_text(f'Tarea "{task.description}" (ID: `{task.id}`) creada exitosamente.')
         logger.info(f"Tarea '{task.description}' (ID: {task.id}) creada por el usuario {user_id}.")
 
         if task.due_date:
-            if task.frequency in [None, 'una vez']:
-                await schedule_instant_reminder(task.id)
+            # Los argumentos de schedule_instant_reminder y schedule_recurring_task cambiaron
+            # Ahora solo necesitan el task_id y la frecuencia (para recurring)
+            if task.frequency in [None, 'una_vez']: # 'una_vez' es el string en la DB, no 'una vez'
+                await schedule_instant_reminder(task.id) # Llamada asíncrona
             elif task.frequency in ['diaria', 'semanal', 'mensual', 'anual']:
-                await schedule_recurring_task(task.id, task.frequency)
+                await schedule_recurring_task(task.id, task.frequency) # Llamada asíncrona
             else:
                 logger.warning(f"Tarea {task.id} con frecuencia '{task.frequency}' no pudo ser programada por el scheduler.")
         else:
@@ -136,13 +154,18 @@ async def received_task_frequency(update: Update, context: ContextTypes.DEFAULT_
 async def list_tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Lista las tareas pendientes del usuario."""
     user_id = update.effective_user.id
-    with get_db() as db:
-        user = get_user(db, user_id)
+
+    if not update.effective_chat:
+        logger.error(f"No se recibió un objeto de chat válido para el usuario {user_id} en /list_tasks. No se puede responder.")
+        return ConversationHandler.END
+
+    async with get_db() as db: # Usar async with
+        user = await get_user_by_telegram_id(db, user_id) # Llamada asíncrona
         if not user:
             await update.message.reply_text("Por favor, usa /start primero para registrarte.")
             return
 
-        tasks = get_tasks_by_user(db, user.id) # get_tasks_by_user filtra por completed=False por defecto
+        tasks = await get_incomplete_tasks(db, user.id) # Llamada asíncrona, asumiendo incompletas
         if tasks:
             response = "Tus tareas pendientes:\n"
             user_tz_str = user.timezone if user.timezone else 'UTC'
@@ -170,9 +193,12 @@ async def list_tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def complete_task_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Inicia la conversación para marcar una tarea como completada."""
     user_id = update.effective_user.id
+    if not update.effective_chat:
+        logger.error(f"No se recibió un objeto de chat válido para el usuario {user_id} en /complete_task. No se puede responder.")
+        return ConversationHandler.END
     try:
-        with get_db() as db:
-            tasks = get_tasks_by_user(db, user_id) # Obtener tareas incompletas
+        async with get_db() as db: # Usar async with
+            tasks = await get_incomplete_tasks(db, user_id) # Llamada asíncrona
         if not tasks:
             await update.message.reply_text("No tienes tareas incompletas para marcar como completadas.")
             return ConversationHandler.END
@@ -183,7 +209,7 @@ async def complete_task_command(update: Update, context: ContextTypes.DEFAULT_TY
         for task in tasks:
             due_date_str = task.due_date.strftime('%Y-%m-%d %H:%M') if task.due_date else "Sin fecha"
             freq_str = f" ({task.frequency.capitalize()})" if task.frequency else ""
-            message += f"ID: {task.id} - {task.description} (Vence: {due_date_str}){freq_str}\n"
+            message += f"ID: `{task.id}` - `{task.description}` (Vence: {due_date_str}){freq_str}\n"
         await update.message.reply_text(message)
         return COMPLETE_TASK_SELECT_ID
     except Exception as e:
@@ -196,6 +222,10 @@ async def confirm_complete_task(update: Update, context: ContextTypes.DEFAULT_TY
     task_id_str = update.message.text
     user_id = update.effective_user.id
 
+    if not update.effective_chat:
+        logger.error(f"No se recibió un objeto de chat válido para el usuario {user_id} al confirmar completar. No se puede responder.")
+        return ConversationHandler.END
+
     try:
         task_id = int(task_id_str)
         task_obj = context.user_data.get('tasks_to_complete', {}).get(task_id_str)
@@ -205,13 +235,13 @@ async def confirm_complete_task(update: Update, context: ContextTypes.DEFAULT_TY
             return COMPLETE_TASK_SELECT_ID
         
         # Para tareas recurrentes, solo informamos, no las marcamos como completadas permanentemente.
-        if task_obj.frequency and task_obj.frequency != 'una vez':
+        if task_obj.frequency and task_obj.frequency != 'una_vez': # 'una_vez' es el string en la DB
             await update.message.reply_text(f"La tarea '{task_obj.description}' (ID: `{task_id}`) es recurrente. No se marca como 'completada' permanentemente. Simplemente la estás registrando como hecha para este ciclo.")
-            logger.info(f"Usuario {user_id} intentó 'completar' tarea recurrente {task_id}.")
+            logger.info(f"Usuario {user_id} intentó 'completar' tarea recurrente {task_id}. No se marcó como 'completed=True'.")
             return ConversationHandler.END # No finalizamos, permitimos que el usuario complete otra tarea si lo desea
 
-        with get_db() as db:
-            success = complete_task(db, task_id, user_id) # Pasa el user_id para verificar propiedad
+        async with get_db() as db: # Usar async with
+            success = await complete_task_by_id(db, task_id) # Llamada asíncrona y pasa solo task_id
             
             if success:
                 # Si la tarea se marcó como completada y era de una vez, eliminamos el job asociado
@@ -239,9 +269,12 @@ async def confirm_complete_task(update: Update, context: ContextTypes.DEFAULT_TY
 async def delete_task_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Inicia la conversación para eliminar una tarea."""
     user_id = update.effective_user.id
+    if not update.effective_chat:
+        logger.error(f"No se recibió un objeto de chat válido para el usuario {user_id} en /delete_task. No se puede responder.")
+        return ConversationHandler.END
     try:
-        with get_db() as db:
-            tasks = get_user_tasks(db, user_id) # Obtener todas las tareas para dar más opciones al eliminar
+        async with get_db() as db: # Usar async with
+            tasks = await get_user_tasks(db, user_id) # Obtener todas las tareas para dar más opciones al eliminar (Llamada asíncrona)
         if not tasks:
             await update.message.reply_text("No tienes tareas para eliminar.")
             return ConversationHandler.END
@@ -253,7 +286,7 @@ async def delete_task_command(update: Update, context: ContextTypes.DEFAULT_TYPE
             status = "Completada" if task.completed else "Incompleta"
             due_date_str = task.due_date.strftime('%Y-%m-%d %H:%M') if task.due_date else "Sin fecha"
             freq_str = f" ({task.frequency.capitalize()})" if task.frequency else ""
-            message += f"ID: {task.id} - {task.description} (Estado: {status}, Vence: {due_date_str}){freq_str}\n"
+            message += f"ID: `{task.id}` - `{task.description}` (Estado: {status}, Vence: {due_date_str}){freq_str}\n"
         await update.message.reply_text(message)
         return DELETE_TASK_SELECT_ID
     except Exception as e:
@@ -266,6 +299,10 @@ async def confirm_delete_task(update: Update, context: ContextTypes.DEFAULT_TYPE
     task_id_str = update.message.text
     user_id = update.effective_user.id
 
+    if not update.effective_chat:
+        logger.error(f"No se recibió un objeto de chat válido para el usuario {user_id} al confirmar eliminar. No se puede responder.")
+        return ConversationHandler.END
+
     try:
         task_id = int(task_id_str)
         task_obj = context.user_data.get('tasks_to_delete', {}).get(task_id_str)
@@ -274,8 +311,8 @@ async def confirm_delete_task(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text("ID de tarea no válido. Por favor, ingresa un ID de la lista.")
             return DELETE_TASK_SELECT_ID
 
-        with get_db() as db:
-            success = delete_task(db, task_id, user_id) # Pasa el user_id para verificar propiedad
+        async with get_db() as db: # Usar async with
+            success = await delete_task_by_id(db, task_id) # Llamada asíncrona
             if success:
                 # Si la tarea se eliminó de la DB, también elimina los jobs asociados del scheduler
                 scheduler = get_scheduler()
@@ -304,12 +341,15 @@ async def confirm_delete_task(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text('Lo siento, ocurrió un error al eliminar la tarea. Por favor, inténtalo de nuevo.')
         return ConversationHandler.END
 
-async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Cancela cualquier conversación en curso."""
-    await update.message.reply_text('Operación cancelada.')
+async def cancel_command_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Cancela cualquier conversación de tareas en curso."""
+    if update.effective_chat:
+        await update.message.reply_text('Operación de tarea cancelada.')
+    else:
+        logger.error(f"No se recibió un objeto de chat válido para el usuario {update.effective_user.id} al cancelar. No se puede responder.")
     return ConversationHandler.END
 
-def setup_task_handlers(application: Application):
+def setup_task_handlers(application):
     """Registra todos los ConversationHandlers y CommandHandlers de tareas en la aplicación."""
     logger.info("Configurando handlers de tareas...")
 
@@ -321,7 +361,7 @@ def setup_task_handlers(application: Application):
             TASK_DUE_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, received_task_due_date)],
             TASK_FREQUENCY: [MessageHandler(filters.TEXT & ~filters.COMMAND, received_task_frequency)],
         },
-        fallbacks=[CommandHandler('cancel', cancel_command)],
+        fallbacks=[CommandHandler('cancelar', cancel_command_tasks)], # Usar /cancelar
     )
     application.add_handler(new_task_conv_handler)
 
@@ -334,7 +374,7 @@ def setup_task_handlers(application: Application):
         states={
             COMPLETE_TASK_SELECT_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_complete_task)],
         },
-        fallbacks=[CommandHandler('cancel', cancel_command)],
+        fallbacks=[CommandHandler('cancelar', cancel_command_tasks)], # Usar /cancelar
     )
     application.add_handler(complete_task_conv_handler)
 
@@ -344,8 +384,7 @@ def setup_task_handlers(application: Application):
         states={
             DELETE_TASK_SELECT_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_delete_task)],
         },
-        fallbacks=[CommandHandler('cancel', cancel_command)],
+        fallbacks=[CommandHandler('cancelar', cancel_command_tasks)], # Usar /cancelar
     )
     application.add_handler(delete_task_conv_handler)
     logger.info("Handlers de tareas configurados.")
-
