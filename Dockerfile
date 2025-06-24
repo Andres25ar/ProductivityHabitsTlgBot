@@ -1,20 +1,29 @@
-# Usa una imagen base oficial de Python
-FROM python:3.11.9
+# Usa una imagen base de Python ligera
+FROM python:3.11-slim-buster
 
 # Establece el directorio de trabajo dentro del contenedor
 WORKDIR /app
 
-# Copia los archivos de requerimientos y módulos a tu contenedor
+# Copia los archivos de requerimientos e instala las dependencias
 COPY requirements.txt .
-
-# Instala las dependencias
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copia todo el código de tu bot al contenedor
-# Copia el directorio src/bot completo al directorio /app
-COPY src/ ./src
+# Copia los scripts de inicialización y dales permisos de ejecución
+COPY init.sh .
+COPY wait-for-it.sh .
+RUN chmod +x init.sh wait-for-it.sh
 
-# Comando para ejecutar tu aplicación cuando el contenedor inicie
-# CMD es el comando principal del contenedor
-#CMD ["python", "-m", "productivity_habits_bot.py"]
-CMD ["python", "-m", "src.bot.productivity_habits_bot"]
+# Copia el archivo .env primero (si es necesario para la fase de construcción, aunque es menos común)
+# Si tu .env solo contiene variables para el runtime, puedes omitir esta línea y depender de docker-compose.yml
+COPY .env .
+
+# Copia el resto del código de la aplicación
+COPY . .
+
+# ***** LÍNEA AÑADIDA: Establece PYTHONPATH para que Python encuentre los módulos en 'src' *****
+ENV PYTHONPATH=/app
+# ************************************************************************************************
+
+# Define el comando que se ejecutará cuando el contenedor se inicie
+# Ahora se ejecuta init.sh, que a su vez iniciará el bot.
+CMD ["./init.sh"]

@@ -1,6 +1,10 @@
-python-telegram-bot==20.7.0
-SQLAlchemy
-python-dotenv
+python-telegram-bot==21.2
+APScheduler==3.10.4
+SQLAlchemy==2.0.30
+asyncpg==0.29.0
+python-dotenv==1.0.1
+psycopg2-binary==2.9.9  # Added for synchronous SQLAlchemy connections (used by APScheduler's JobStore)
+pytz
+tzdata # For timezone handling, good practice
+dateparser==1.2.0 # Added for parsing dates and times from strings
 requests
-hupper 
-psycopg2-binary

@@ -1,213 +1,282 @@
-#api del bot: TELEGRAM_BOT_TOKEN
-#api para acceder a datos del clima: OPENWEATHER_API_KEY
+# src/database/database_interation.py
 
-import os
 import logging
-import sqlalchemy as sa
-from sqlalchemy.orm import declarative_base, relationship, sessionmaker
-from dotenv import load_dotenv
 from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from sqlalchemy import text
+from sqlalchemy.future import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-load_dotenv()
+# Importar solo los modelos que necesita, no AsyncSessionLocal o engine
+from src.database.models import Base, User, DefaultHabit, UserHabit, UserTask 
 
-POSTGRES_DB = os.getenv("POSTGRES_DB")
-POSTGRES_USER = os.getenv("POSTGRES_USER")
-POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD")
-DB_HOST = os.getenv("DB_HOST")
-DB_PORT = os.getenv("DB_PORT")
+db_logger = logging.getLogger(__name__)
+db_logger.setLevel(logging.INFO)
 
-#coneccion a la base de datos postgreSQL
-DATABASE_URL = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{DB_HOST}:{DB_PORT}/{POSTGRES_DB}"
+async def create_user_if_not_exists(db: AsyncSession, telegram_id: int, username: str = None, first_name: str = None, last_name: str = None) -> User:
+    db_logger.info(f"Comprobando si existe el usuario con Telegram ID: {telegram_id}")
+    result = await db.execute(select(User).filter(User.telegram_id == telegram_id))
+    user = result.scalar_one_or_none()
 
-Base = declarative_base()
+    if not user:
+        db_logger.info(f"Usuario con Telegram ID {telegram_id} no encontrado. Creando nuevo.")
+        user = User(
+            telegram_id=telegram_id,
+            username=username,
+            first_name=first_name,
+            last_name=last_name,
+        )
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+        db_logger.info(f"Nuevo usuario creado con Telegram ID: {telegram_id}")
+    else:
+        db_logger.debug(f"Usuario con Telegram ID: {telegram_id} ya existe.")
+    return user
 
-class User(Base):
-    __tablename__ = "users"
-    id = sa.Column(sa.BigInteger, primary_key=True)
-    username = sa.Column(sa.String, nullable=True)
-    first_name = sa.Column(sa.String, nullable=False)
-    last_name = sa.Column(sa.String, nullable=True)
-    habits = relationship("UserHabit", back_populates="user")
-    tasks = relationship("Task", back_populates="user")
-
-    def __init__(self, id, username, first_name, last_name=None):
-        self.id = id
-        self.username = username
-        self.first_name = first_name
-        self.last_name = last_name
-
-    @staticmethod
-    def get_user(user_id):
-        session = SessionLocal()
-        user = session.query(User).filter(User.id == user_id).first()
-        session.close()
-        return user
-
-class DefaultHabit(Base):
-    __tablename__ = "default_habits"
-    id = sa.Column(sa.Integer, primary_key=True)
-    name = sa.Column(sa.String, nullable=False, unique=True)
-    description = sa.Column(sa.String, nullable=True)
-    user_habits = relationship("UserHabit", back_populates="habit")
-
-    @staticmethod
-    def load_default_habits():
-        session = SessionLocal()
-        default_habits = [
-            {"name": "Ejercicio", "description": "Recuerda hacer tu rutina de ejercicio diaria"},
-            {"name": "Meditacion", "description": "Dedica 10 minutos a meditar"},
-            {"name": "Leer", "description": "Lee un libro durante 30 minutos"},
-            {"name": "Hidratacion", "description": "No olvides beber suficiente agua"},
-            {"name": "Dormir", "description": "Cumple tus 7 horas de sueño"},
-            {"name": "Medicar", "description": "Recuerda tomar tus medicamentos"},
-            {"name": "Aprende", "description": "Todos los días se aprende algo nuevo"},
-            {"name": "Descansa", "description": "Toma un descanso de 5 minutos cada hora en tu trabajo"},
-            {"name": "Busca a los Niños", "description": "No olvides buscar a los niños al colegio"},
-            {"name": "Limpieza", "description": "Dedica 15 minutos a limpiar tu casa"},
-            {"name": "Planifica el día", "description": "Dedica 10 minutos a planificar tu día"},
-            {"name": "Revisa tus finanzas", "description": "Revisa tus gastos e ingresos diarios"},
-            {"name": "Practica un hobby", "description": "Dedica tiempo a tu pasatiempo favorito"},
-            {"name": "Socializa", "description": "Habla con un amigo o familiar hoy"},
-            {"name": "Escucha música", "description": "Disfruta de tu música favorita durante 30 minutos"},
-            {"name": "Escribe un diario", "description": "Escribe tus pensamientos y reflexiones del día"},
-        ]
+async def load_default_habits(db: AsyncSession):
+    db_logger.info("Cargando hábitos por defecto...")
+    default_habits = [
+        {"name": "Ejercicio", "description": "Recuerda hacer tu rutina de ejercicio diaria"},
+        {"name": "Meditacion", "description": "Dedica 10 minutos a meditar"},
+        {"name": "Leer", "description": "Lee un libro durante 30 minutos"},
+        {"name": "Hidratacion", "description": "No olvides beber suficiente agua"},
+        {"name": "Dormir", "description": "Cumple tus 7 horas de sueño"},
+        {"name": "Medicar", "description": "Recuerda tomar tus medicamentos"},
+        {"name": "Aprende", "description": "Todos los días se aprende algo nuevo"},
+        {"name": "Descansa", "description": "Toma un descanso de 5 minutos cada hora en tu trabajo"},
+        {"name": "Busca a los Niños", "description": "No olvides buscar a los niños al colegio"},
+        {"name": "Limpieza", "description": "Dedica 15 minutos a limpiar tu casa"},
+        {"name": "Planifica el día", "description": "Dedica 10 minutos a planificar tu día"},
+        {"name": "Revisa tus finanzas", "description": "Revisa tus gastos e ingresos diarios"},
+        {"name": "Practica un hobby", "description": "Dedica tiempo a tu pasatiempo favorito"},
+        {"name": "Socializa", "description": "Habla con un amigo o familiar hoy"},
+        {"name": "Escucha música", "description": "Disfruta de tu música favorita durante 30 minutos"},
+        {"name": "Escribe un diario", "description": "Escribe tus pensamientos y reflexiones del día"},
+    ]
+    try:
         for habit in default_habits:
-            existing_habit = session.query(DefaultHabit).filter_by(name=habit["name"]).first()
+            result = await db.execute(select(DefaultHabit).filter_by(name=habit["name"]))
+            existing_habit = result.scalar_one_or_none()
             if not existing_habit:
                 new_habit = DefaultHabit(**habit)
-                session.add(new_habit)
-        session.commit()
-        session.close()
+                db.add(new_habit)
+                db_logger.debug(f"Añadiendo hábito por defecto: '{habit['name']}'")
+            else:
+                db_logger.debug(f"Hábito por defecto '{habit['name']}' ya existe. Saltando.")
+        await db.commit()
+        db_logger.info(f"Hábitos por defecto cargados o ya existían. {len(default_habits)} hábitos procesados.")
+    except Exception as e:
+        await db.rollback()
+        db_logger.error(f"Error al cargar hábitos por defecto: {e}", exc_info=True)
 
-    @staticmethod
-    def get_habits(default_habit_id=None):
-        session = SessionLocal()
-        if default_habit_id:
-            habits = session.query(DefaultHabit).filter(DefaultHabit.id == default_habit_id).all()
+
+async def get_user_by_telegram_id(db: AsyncSession, telegram_id: int) -> User | None:
+    db_logger.debug(f"[DB] Buscando usuario con telegram_id: {telegram_id}")
+    result = await db.execute(select(User).filter(User.telegram_id == telegram_id))
+    user = result.scalar_one_or_none()
+    if user:
+        db_logger.debug(f"[DB] Usuario {telegram_id} encontrado: {user.first_name}, timezone actual: {user.timezone}")
+    else:
+        db_logger.debug(f"[DB] Usuario con telegram_id {telegram_id} no encontrado.")
+    return user
+
+async def update_user_timezone(db: AsyncSession, user_id: int, new_timezone: str) -> bool:
+    db_logger.info(f"Intentando actualizar la zona horaria para user_id {user_id} a '{new_timezone}'")
+    try:
+        result = await db.execute(select(User).filter(User.id == user_id))
+        user = result.scalar_one_or_none()
+        if user:
+            try:
+                ZoneInfo(new_timezone)
+            except ZoneInfoNotFoundError:
+                db_logger.error(f"Zona horaria '{new_timezone}' no es válida según ZoneInfo para user_id {user_id}.")
+                return False
+
+            user.timezone = new_timezone
+            await db.commit()
+            await db.refresh(user)
+            db_logger.info(f"Zona horaria para usuario {user_id} actualizada a: {user.timezone}")
+            return True
         else:
-            habits = session.query(DefaultHabit).all()
-        session.close()
-        return habits
+            db_logger.warning(f"No se encontró el usuario con user_id {user_id} para actualizar la zona horaria.")
+            return False
+    except Exception as e:
+        await db.rollback()
+        db_logger.error(f"Error al actualizar la zona horaria para user_id {user_id}: {e}", exc_info=True)
+        raise
 
-class UserHabit(Base):
-    __tablename__ = "user_habits"
-    id = sa.Column(sa.Integer, primary_key=True)
-    user_id = sa.Column(sa.BigInteger, sa.ForeignKey("users.id"))
-    habit_id = sa.Column(sa.Integer, sa.ForeignKey("default_habits.id"))
-    # time = sa.Column(sa.Time, nullable=False)  # Atributo time comentado, no se usará
-    user = relationship("User", back_populates="habits")
-    habit = relationship("DefaultHabit", back_populates="user_habits")
+async def set_task(db: AsyncSession, user_id: int, description: str, due_date: datetime = None, frequency: str = None) -> UserTask:
+    db_logger.info(f"Intentando guardar nueva tarea para user_id: {user_id}, descripción: '{description}', fecha: {due_date}, frecuencia: {frequency}")
+    try:
+        result = await db.execute(select(User).filter(User.id == user_id))
+        user = result.scalar_one_or_none()
+        if not user:
+            raise ValueError(f"Usuario con ID {user_id} no encontrado.")
 
-    def __init__(self, user_id, habit_id):  # time eliminado del constructor
-        self.user_id = user_id
-        self.habit_id = habit_id
-        # self.time = time
+        user_timezone_str = user.timezone if user.timezone else 'UTC'
+        try:
+            user_tz = ZoneInfo(user_timezone_str)
+        except ZoneInfoNotFoundError:
+            db_logger.warning(f"Zona horaria '{user_timezone_str}' no válida para el usuario {user_id}. Usando UTC.")
+            user_tz = ZoneInfo('UTC')
 
-    @staticmethod
-    def set_habit_for_user(user_id, habit_id):  # time eliminado de los parámetros
-        session = SessionLocal()
-        user_habit = UserHabit(user_id=user_id, habit_id=habit_id)
-        session.add(user_habit)
-        session.commit()
-        session.close()
+        if due_date is None:
+            current_time_in_user_tz = datetime.now(user_tz)
+            due_date_utc = current_time_in_user_tz.astimezone(ZoneInfo('UTC'))
+            db_logger.debug(f"due_date no proporcionada, usando fecha y hora actual ({current_time_in_user_tz}) convertida a UTC: {due_date_utc}")
+        else:
+            if due_date.tzinfo is None:
+                due_date_aware_in_user_tz = due_date.replace(tzinfo=user_tz)
+                due_date_utc = due_date_aware_in_user_tz.astimezone(ZoneInfo('UTC'))
+                db_logger.debug(f"due_date naive proporcionada ({due_date}), asumiendo TZ de usuario ({user_tz}) y convirtiendo a UTC: {due_date_utc}")
+            else:
+                due_date_utc = due_date.astimezone(ZoneInfo('UTC'))
+                db_logger.debug(f"due_date aware proporcionada ({due_date}), convirtiendo a UTC: {due_date_utc}")
 
-    @staticmethod
-    def get_user_habits(user_id):
-        session = SessionLocal()
-        user_habits = session.query(UserHabit).filter(UserHabit.user_id == user_id).all()
-        session.close()
-        return user_habits
-
-    '''@staticmethod
-    def change_time(user_id, habit_id, new_time):
-        # Método dejado para compatibilidad, pero no hace nada ya que time está comentado
-        pass'''
-
-class Task(Base):
-    __tablename__ = "tasks"
-    id = sa.Column(sa.Integer, primary_key=True)
-    user_id = sa.Column(sa.BigInteger, sa.ForeignKey("users.id"))
-    description = sa.Column(sa.String, nullable=False)
-    due_date = sa.Column(sa.DateTime, nullable=True)
-    time = sa.Column(sa.Time, nullable=True)
-    completed = sa.Column(sa.Boolean, default=False)
-    user = relationship("User", back_populates="tasks")
-
-    def __init__(self, user_id, description, due_date=None, time=None):
-        self.user_id = user_id
-        self.description = description
-        self.due_date = due_date if due_date else datetime.now().date()
-        self.time = time if time else datetime.now().time()
-
-    @staticmethod
-    def set_task(user_id, description, due_date=None, due_time=None):
-        session = SessionLocal()
-        task = Task(user_id=user_id, description=description, due_date=due_date, time=due_time)
-        session.add(task)
-        session.commit()
-        session.close()
-
-    @staticmethod
-    def get_task(task_id):
-        session = SessionLocal()
-        task = session.query(Task).filter(Task.id == task_id).first()
-        session.close()
+        task = UserTask(
+            user_id=user_id,
+            description=description,
+            due_date=due_date_utc,
+            completed=False,
+            frequency=frequency
+        )
+        db.add(task)
+        await db.commit()
+        await db.refresh(task)
+        db_logger.info(f"Tarea {task.id} ('{task.description}') guardada exitosamente para usuario {user_id}. due_date UTC: {task.due_date}")
         return task
+    except Exception as e:
+        await db.rollback()
+        db_logger.error(f"Error al guardar la tarea para user_id {user_id} en la DB: {e}", exc_info=True)
+        raise
 
-    @staticmethod
-    def get_task_to_time(user_id, time):
-        session = SessionLocal()
-        tasks = session.query(Task).filter(
-            Task.user_id == user_id,
-            Task.time == time
-        ).all()
-        session.close()
+async def get_task(db: AsyncSession, task_id: int) -> UserTask | None:
+    db_logger.debug(f"Buscando tarea con ID: {task_id}")
+    try:
+        result = await db.execute(select(UserTask).filter(UserTask.id == task_id))
+        task = result.scalar_one_or_none()
+        if task:
+            db_logger.debug(f"Tarea {task_id} encontrada: '{task.description}'.")
+        else:
+            db_logger.debug(f"Tarea con ID {task_id} no encontrada.")
+        return task
+    except Exception as e:
+        db_logger.error(f"Error al obtener tarea con ID {task_id}: {e}", exc_info=True)
+        raise
+
+async def get_user_tasks(db: AsyncSession, user_id: int) -> list[UserTask]:
+    db_logger.debug(f"Obteniendo todas las tareas para user_id: {user_id}")
+    try:
+        result = await db.execute(select(UserTask).filter(UserTask.user_id == user_id).order_by(UserTask.due_date))
+        tasks = result.scalars().all()
+        db_logger.info(f"Encontradas {len(tasks)} tareas para user_id: {user_id}.")
         return tasks
+    except Exception as e:
+        db_logger.error(f"Error al obtener todas las tareas para user_id {user_id}: {e}", exc_info=True)
+        raise
 
-    @staticmethod
-    def get_user_tasks(user_id):
-        session = SessionLocal()
-        tasks = session.query(Task).filter(Task.user_id == user_id).all()
-        session.close()
+async def get_incomplete_tasks(db: AsyncSession, user_id: int) -> list[UserTask]:
+    db_logger.debug(f"Obteniendo tareas incompletas para user_id: {user_id}")
+    try:
+        result = await db.execute(
+            select(UserTask).filter(
+                UserTask.user_id == user_id,
+                UserTask.completed == False
+            ).order_by(UserTask.due_date)
+        )
+        tasks = result.scalars().all()
+        db_logger.info(f"Encontradas {len(tasks)} tareas incompletas para user_id: {user_id}.")
         return tasks
+    except Exception as e:
+        db_logger.error(f"Error al obtener tareas incompletas para user_id {user_id}: {e}", exc_info=True)
+        raise
 
-    @staticmethod
-    def get_incomplete_tasks(user_id):
-        session = SessionLocal()
-        tasks = session.query(Task).filter(
-            Task.user_id == user_id,
-            Task.completed == False
-        ).all()
-        session.close()
+async def get_all_incomplete_tasks(db: AsyncSession) -> list[UserTask]:
+    """
+    Obtiene todas las tareas incompletas de TODOS los usuarios.
+    Útil para el scheduler al inicio del bot.
+    """
+    db_logger.debug("Obteniendo TODAS las tareas incompletas para el scheduler.")
+    try:
+        result = await db.execute(
+            select(UserTask).filter(UserTask.completed == False).order_by(UserTask.due_date)
+        )
+        tasks = result.scalars().all()
+        db_logger.info(f"Encontradas {len(tasks)} tareas incompletas en total para el scheduler.")
         return tasks
+    except Exception as e:
+        db_logger.error(f"Error al obtener todas las tareas incompletas para el scheduler: {e}", exc_info=True)
+        raise
 
-    @staticmethod
-    def get_completed_tasks(user_id):
-        session = SessionLocal()
-        tasks = session.query(Task).filter(
-            Task.user_id == user_id,
-            Task.completed == True
-        ).all()
-        session.close()
+async def get_completed_tasks(db: AsyncSession, user_id: int) -> list[UserTask]:
+    db_logger.debug(f"Obteniendo tareas completadas para user_id: {user_id}")
+    try:
+        result = await db.execute(
+            select(UserTask).filter(
+                UserTask.user_id == user_id,
+                UserTask.completed == True
+            ).order_by(UserTask.due_date)
+        )
+        tasks = result.scalars().all()
+        db_logger.info(f"Encontradas {len(tasks)} tareas completadas para user_id: {user_id}.")
         return tasks
+    except Exception as e:
+        db_logger.error(f"Error al obtener tareas completadas para user_id {user_id}: {e}", exc_info=True)
+        raise
 
-    @staticmethod
-    def mark_as_completed(task_id):
-        session = SessionLocal()
-        task = session.query(Task).filter(Task.id == task_id).first()
+async def mark_as_completed(db: AsyncSession, task_id: int) -> bool:
+    db_logger.info(f"Marcando tarea ID {task_id} como completada.")
+    try:
+        result = await db.execute(select(UserTask).filter(UserTask.id == task_id))
+        task = result.scalar_one_or_none()
         if task:
             task.completed = True
-            session.commit()
-        session.close()
+            await db.commit()
+            await db.refresh(task)
+            db_logger.info(f"Tarea {task_id} marcada como completada exitosamente.")
+            return True
+        else:
+            db_logger.warning(f"No se encontró la tarea con ID {task_id} para marcar como completada.")
+            return False
+    except Exception as e:
+        await db.rollback()
+        db_logger.error(f"Error al marcar tarea {task_id} como completada: {e}", exc_info=True)
+        raise
 
-engine = sa.create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(bind=engine)
+async def delete_task_by_id(db: AsyncSession, task_id: int) -> bool:
+    db_logger.info(f"Intentando eliminar tarea con ID: {task_id}")
+    try:
+        result = await db.execute(select(UserTask).filter(UserTask.id == task_id))
+        task = result.scalar_one_or_none()
+        if task:
+            await db.delete(task)
+            await db.commit()
+            db_logger.info(f"Tarea {task_id} eliminada exitosamente.")
+            return True
+        else:
+            db_logger.warning(f"No se encontró la tarea con ID {task_id} para eliminar.")
+            return False
+    except Exception as e:
+        await db.rollback()
+        db_logger.error(f"Error al eliminar la tarea con ID {task_id}: {e}", exc_info=True)
+        raise
 
-
-def init_db():
-    Base.metadata.create_all(bind=engine)
-
-'''otras tareas sobre la base de datos'''
-
-
-
+async def complete_task_by_id(db: AsyncSession, task_id: int) -> bool:
+    db_logger.info(f"Intentando marcar como completada la tarea con ID: {task_id}")
+    try:
+        result = await db.execute(select(UserTask).filter(UserTask.id == task_id))
+        task = result.scalar_one_or_none()
+        if task:
+            task.completed = True
+            await db.commit()
+            await db.refresh(task)
+            db_logger.info(f"Tarea {task_id} marcada como completada exitosamente.")
+            return True
+        else:
+            db_logger.warning(f"No se encontró la tarea con ID {task_id} para marcar como completada.")
+            return False
+    except Exception as e:
+        await db.rollback()
+        db_logger.error(f"Error al marcar como completada la tarea con ID {task_id}: {e}", exc_info=True)
+        raise

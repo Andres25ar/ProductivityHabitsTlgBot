@@ -1,43 +1,32 @@
-version: '3.8'
-
 services:
-  # Servicio de la base de datos PostgreSQL
   db:
-    image: postgres:17 # Usa una imagen oficial de PostgreSQL (puedes elegir la versión)
+    image: postgres:13
+    volumes:
+      - db_data:/var/lib/postgresql/data
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
-      - "5432:5432" # Opcional: Expone el puerto de la DB al host (útil para pgAdmin)
-    volumes:
-      - db_data:/var/lib/postgresql/data # Persiste los datos de la DB
-    restart: always # Reinicia el contenedor si falla
+      - "5432:5432" # Expone el puerto 5432 del contenedor al host
 
-  # Servicio de tu bot de Telegram
   bot:
-    build:
-      context: . # Busca el Dockerfile en el directorio actual (raíz del proyecto)
-      dockerfile: Dockerfile
+    build: .
+    # Establece las variables de entorno directamente para asegurar su precedencia
     environment:
-      # Pasa todas tus variables de entorno necesarias al contenedor del bot
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      DB_HOST: db # ¡Importante! 'db' es el nombre del servicio de la DB en este mismo docker-compose.yml
-      DB_PORT: ${DB_PORT}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       OPENWEATHER_API_KEY: ${OPENWEATHER_API_KEY}
-      # ... otras APIs ...
+      # ***** ¡LÍNEA AÑADIDA/MODIFICADA PARA FORZAR DATABASE_URL! *****
+      DATABASE_URL: postgresql+asyncpg://productivity_habits_bot_user:pr0duct1v1b1tsgh25@db:5432/productivity_habits_bot_db
+      # *************************************************************
     depends_on:
-      - db # Asegura que el servicio 'db' se inicie antes que 'bot'
-    # entrypoint: ["sh", "-c", "python main.py && sleep 10 && python main.py"] # Si necesitas una espera inicial para la DB
-    # Nota: para la inicialización de la DB, a veces necesitas una espera.
-    # Una mejor práctica es usar scripts de "wait-for-it" o un pequeño script Python que espere
-    # a que la DB esté lista antes de iniciar el bot.
-    # Por ahora, puedes omitir el entrypoint y manejar los errores de conexión en tu código Python.
-    restart: always
+      - db
+    # Añade un reinicio si el bot falla (opcional, pero útil para desarrollo)
+    restart: on-failure
+    # Mapea el directorio actual al /app dentro del contenedor para que los cambios de código sean instantáneos
+    volumes:
+      - .:/app
 
-# Volúmenes para persistir los datos de la base de datos
+# Define los volúmenes a nivel global
 volumes:
   db_data:
