@@ -3,6 +3,19 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Custom added by user
+bot/
+[bot]/
+=/
+CACHED
+ERROR
+exporting
+naming
+resolve
+scheduler.log
+transferring
+unpacking
+
 # C extensions
 *.so
 
@@ -27,8 +40,8 @@ share/python-wheels/
 MANIFEST
 
 # PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
+#   Usually these files are written by a python script from a template
+#   before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
 
@@ -161,10 +174,10 @@ dmypy.json
 cython_debug/
 
 # PyCharm
-#  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
-#  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
-#  and can be added to the global gitignore or merged into this file.  For a more nuclear
-#  option (not recommended) you can uncomment the following to ignore the entire idea folder.
+#   JetBrains specific template is maintained in a separate JetBrains.gitignore that can
+#   be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
+#   and can be added to the global gitignore or merged into this file.  For a more nuclear
+#   option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
 # Abstra
@@ -174,10 +187,10 @@ cython_debug/
 .abstra/
 
 # Visual Studio Code
-#  Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore 
-#  that can be found at https://github.com/github/gitignore/blob/main/Global/VisualStudioCode.gitignore
-#  and can be added to the global gitignore or merged into this file. However, if you prefer, 
-#  you could uncomment the following to ignore the enitre vscode folder
+#   Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore
+#   that can be found at https://github.com/github/gitignore/blob/main/Global/VisualStudioCode.gitignore
+#   and can be added to the global gitignore or merged into this file. However, if you prefer,
+#   you could uncomment the following to ignore the enitre vscode folder
 # .vscode/
 
 # Ruff stuff:
@@ -187,8 +200,8 @@ cython_debug/
 .pypirc
 
 # Cursor
-#  Cursor is an AI-powered code editor. `.cursorignore` specifies files/directories to
-#  exclude from AI features like autocomplete and code analysis. Recommended for sensitive data
-#  refer to https://docs.cursor.com/context/ignore-files
+#   Cursor is an AI-powered code editor. `.cursorignore` specifies files/directories to
+#   exclude from AI features like autocomplete and code analysis. Recommended for sensitive data
+#   refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
