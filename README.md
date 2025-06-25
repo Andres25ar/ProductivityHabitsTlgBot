@@ -84,9 +84,6 @@ A bot for managing smart habits and personal productivity.
 Un bot para gestionar hábitos inteligentes y la productividad personal.
 </p>
 
-<p align="center">
-  <img src="assets/Gemini_Generated_Image_pvre4pvre4pvre4p.png" alt="Imagen de un robot futurista con código binario que representa el proyecto Focus Helper Bot.">
-</p>
 
 ---
 
