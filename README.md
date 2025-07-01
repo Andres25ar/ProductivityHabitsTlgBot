@@ -10,9 +10,6 @@ A bot for managing smart habits and personal productivity.
 
 ---
 
-<details>
-  <summary><h2>Table of Contents 🧾</h2></summary>
-  
 ### ➤ Overview
 
 - [Overview](#-overview)
