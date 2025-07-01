@@ -10,7 +10,7 @@ A bot for managing smart habits and personal productivity.
 
 ---
 
-### ➤ Overview
+### ➤ Table of Contents
 
 - [Overview](#-overview)
 - [Key Features & Functionalities](#-key-features--functionalities)
@@ -84,9 +84,6 @@ Un bot para gestionar hábitos inteligentes y la productividad personal.
 
 ---
 
-<details>
-  <summary><h2>Tabla de Contenidos 🧾</h2></summary>
-  
 ### ➤ Descripción General
 
 - [Resumen](#-resumen)
