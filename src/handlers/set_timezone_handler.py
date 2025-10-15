@@ -1,129 +1,196 @@
-# src/handlers/set_timezone_handler.py
-
 import logging
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError 
-from telegram import Update
-from telegram.ext import ContextTypes, CommandHandler, MessageHandler, filters, ConversationHandler
+import pytz
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    ContextTypes,
+    CommandHandler,
+    ConversationHandler,
+    CallbackQueryHandler,
+)
+import math
 
-# Importar las funciones de base de datos y el context manager necesario
-from src.database.database_interation import get_user_by_telegram_id, update_user_timezone 
-from src.database.db_context import get_db 
+# Importar las funciones de base de datos
+from src.database.database_interation import get_user_by_telegram_id, update_user_timezone
+from src.database.db_context import get_db
 
 logger = logging.getLogger(__name__)
 
-# Estados para la conversación de set_timezone
-SET_TIMEZONE_INPUT = 0
+# --- Estados para la conversación ---
+SELECT_CONTINENT, SELECT_COUNTRY, SELECT_TIMEZONE = range(3)
+COUNTRIES_PER_PAGE = 8 # Puedes ajustar cuántos países mostrar por página
+
+# --- Funciones auxiliares ---
+
+def get_timezones_data():
+    """Crea una estructura de datos anidada de zonas horarias."""
+    timezones_data = {}
+    for country_code in pytz.country_timezones:
+        country_name = pytz.country_names[country_code]
+        for tz in pytz.country_timezones[country_code]:
+            try:
+                continent, city = tz.split('/', 1)
+                if continent not in timezones_data: timezones_data[continent] = {}
+                if country_name not in timezones_data[continent]: timezones_data[continent][country_name] = []
+                timezones_data[continent][country_name].append(tz)
+            except ValueError: continue
+    return timezones_data
+
+TIMEZONES_DATA = get_timezones_data()
+
+# --- Funciones de la Conversación ---
 
 async def start_set_timezone_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    Inicia la conversación para establecer la zona horaria.
-    Pide al usuario que ingrese su zona horaria.
-    """
-    user_telegram_id = update.effective_user.id
-    logger.info(f"Comando /set_timezone recibido de usuario: {user_telegram_id}. Iniciando conversación.")
+    """Inicia la conversación y muestra la lista de continentes."""
+    logger.info(f"Comando /set_timezone recibido de usuario: {update.effective_user.id}")
+    continents = sorted(TIMEZONES_DATA.keys())
+    keyboard = [[InlineKeyboardButton(c, callback_data=f"continent_{c}")] for c in continents]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("Paso 1/3: Por favor, selecciona tu continente:", reply_markup=reply_markup)
+    return SELECT_CONTINENT
 
-    if not update.effective_chat:
-        logger.error(f"No se recibió un objeto de chat válido para el usuario {user_telegram_id} en /set_timezone. No se puede responder.")
-        return ConversationHandler.END
+async def handle_continent_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Muestra la primera página de países para el continente seleccionado."""
+    query = update.callback_query
+    await query.answer()
+    continent = query.data.split('_', 1)[1]
+    context.user_data['selected_continent'] = continent
 
-    await context.bot.send_message(
-        chat_id=update.effective_chat.id,
-        text="Por favor, ingresa tu zona horaria en formato IANA/Olson (ej: `America/Argentina/Salta`). "
-             "Puedes encontrar una lista completa aquí: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones\n"
-             "Escribe /cancelar en cualquier momento para abortar."
+    country_list = sorted(TIMEZONES_DATA[continent].keys())
+    context.user_data['country_list'] = country_list
+
+    # Construir y enviar la primera página
+    await send_paginated_countries(query, context, page=0)
+    return SELECT_COUNTRY
+
+async def send_paginated_countries(query, context: ContextTypes.DEFAULT_TYPE, page: int):
+    """Función reutilizable para enviar una página de países."""
+    continent = context.user_data['selected_continent']
+    country_list = context.user_data['country_list']
+
+    start_index = page * COUNTRIES_PER_PAGE
+    end_index = start_index + COUNTRIES_PER_PAGE
+
+    keyboard = []
+    for country in country_list[start_index:end_index]:
+        keyboard.append([InlineKeyboardButton(country, callback_data=f"country_{country}")])
+
+    # --- Lógica de botones de paginación ---
+    total_pages = math.ceil(len(country_list) / COUNTRIES_PER_PAGE)
+    pagination_buttons = []
+    if page > 0:
+        pagination_buttons.append(InlineKeyboardButton("◀️ Anterior", callback_data=f"page_country_{page - 1}"))
+
+    pagination_buttons.append(InlineKeyboardButton(f"Pág {page + 1}/{total_pages}", callback_data="noop")) # Botón que no hace nada
+
+    if end_index < len(country_list):
+        pagination_buttons.append(InlineKeyboardButton("Siguiente ▶️", callback_data=f"page_country_{page + 1}"))
+
+    if pagination_buttons: keyboard.append(pagination_buttons)
+
+    keyboard.append([InlineKeyboardButton("⬅️ Volver a Continentes", callback_data="back_to_continents")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await query.edit_message_text(
+        text=f"Paso 2/3: Has seleccionado '{continent}'. Ahora, selecciona tu país:",
+        reply_markup=reply_markup
     )
-    return SET_TIMEZONE_INPUT # Pasa al estado donde esperamos la entrada de la zona horaria
 
-async def receive_timezone_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    Recibe la entrada de la zona horaria del usuario, la valida y la guarda.
-    """
-    user_telegram_id = update.effective_user.id
-    timezone_str = update.message.text.strip()
-    logger.debug(f"Usuario {user_telegram_id} ingresó zona horaria: {timezone_str}")
+async def handle_country_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Maneja los clics en los botones de paginación de países."""
+    query = update.callback_query
+    await query.answer()
 
-    if not update.effective_chat:
-        logger.error(f"No se recibió un objeto de chat válido para el usuario {user_telegram_id} al recibir la zona horaria. No se puede responder.")
-        return ConversationHandler.END
+    page = int(query.data.split('_')[-1])
+    await send_paginated_countries(query, context, page=page)
 
+    return SELECT_COUNTRY
+
+
+async def handle_country_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Maneja la selección del país y muestra las zonas horarias disponibles."""
+    query = update.callback_query
+    await query.answer()
+    country = query.data.split('_', 1)[1]
+    continent = context.user_data['selected_continent']
+    timezones = sorted(TIMEZONES_DATA[continent][country])
+
+    keyboard = []
+    for tz in timezones:
+        city_region = tz.split('/', 1)[1].replace('_', ' ')
+        keyboard.append([InlineKeyboardButton(city_region, callback_data=f"tz_{tz}")])
+
+    keyboard.append([InlineKeyboardButton("⬅️ Volver a Países", callback_data=f"back_to_countries_{continent}")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.edit_message_text(
+        text=f"Paso 3/3: Has seleccionado '{country}'. Ahora, selecciona tu zona horaria:",
+        reply_markup=reply_markup
+    )
+    return SELECT_TIMEZONE
+
+async def handle_timezone_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Maneja la selección final y guarda la zona horaria."""
+    query = update.callback_query
+    await query.answer()
+    timezone_str = query.data.split('_', 1)[1]
+    user_telegram_id = query.from_user.id
     try:
-        # Intenta crear un objeto ZoneInfo para validar si la cadena es un TZ IANA/Olson válido
-        ZoneInfo(timezone_str)
-        logger.debug(f"Zona horaria '{timezone_str}' es válida para usuario {user_telegram_id}.")
-    except ZoneInfoNotFoundError:
-        logger.warning(f"Usuario {user_telegram_id} intentó establecer zona horaria inválida: {timezone_str}")
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text="❌ Esa no es una zona horaria válida. Por favor, usa el formato IANA/Olson "
-                 f"(ej: `America/Argentina/Salta`).\n"
-                 "Consulta la lista aquí: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones\n"
-                 "Por favor, intenta de nuevo o /cancelar."
-        )
-        return SET_TIMEZONE_INPUT # Permanece en el mismo estado para que el usuario intente de nuevo
-    except Exception as e:
-        logger.error(f"Error inesperado al validar zona horaria '{timezone_str}' para usuario {user_telegram_id}: {e}", exc_info=True)
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text="Ocurrió un error inesperado al validar tu zona horaria. Por favor, inténtalo de nuevo o /cancelar."
-        )
-        return SET_TIMEZONE_INPUT # Permanece en el mismo estado
-
-    try:
-        async with get_db() as db: 
-            user = await get_user_by_telegram_id(db, user_telegram_id) 
-            logger.debug(f"Resultado get_user_by_telegram_id para {user_telegram_id}: {user}")
-
+        async with get_db() as db:
+            user = await get_user_by_telegram_id(db, user_telegram_id)
             if not user:
-                logger.warning(f"Usuario {user_telegram_id} intentó establecer zona horaria sin estar registrado.")
-                await context.bot.send_message(
-                    chat_id=update.effective_chat.id,
-                    text="No estás registrado. Por favor, usa /start primero para registrarte."
-                )
-                return ConversationHandler.END # Termina la conversación
-
-            success = await update_user_timezone(db, user.id, timezone_str) 
-            
+                await query.edit_message_text("Error: No estás registrado. Usa /start primero.")
+                return ConversationHandler.END
+            success = await update_user_timezone(db, user.id, timezone_str)
             if success:
-                logger.info(f"Zona horaria del usuario {user_telegram_id} actualizada en DB a {timezone_str}.")
-                await context.bot.send_message(
-                    chat_id=update.effective_chat.id,
-                    text=f"✅ ¡Listo! Tu zona horaria ha sido establecida a `{timezone_str}`.\n"
-                         "A partir de ahora, los recordatorios y tareas se ajustarán a esta zona horaria."
-                )
+                await query.edit_message_text(f"✅ ¡Listo! Tu zona horaria ha sido establecida a `{timezone_str}`.")
             else:
-                logger.warning(f"Fallo al actualizar la zona horaria en la DB para usuario {user_telegram_id} a {timezone_str}.")
-                await context.bot.send_message(
-                    chat_id=update.effective_chat.id,
-                    text="⚠️ Hubo un problema al guardar tu zona horaria. Parece que tu usuario no fue encontrado o la zona horaria no se pudo aplicar correctamente."
-                )
-        return ConversationHandler.END # Termina la conversación si fue exitoso o falló al guardar
+                await query.edit_message_text("⚠️ Hubo un problema al guardar tu zona horaria.")
     except Exception as e:
-        logger.error(f"Error al actualizar zona horaria para usuario {user_telegram_id}: {e}", exc_info=True)
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text="Ocurrió un error al intentar guardar tu zona horaria en la base de datos. Por favor, inténtalo de nuevo o /cancelar."
-        )
-        return ConversationHandler.END # Termina la conversación en caso de error grave
+        logger.error(f"Error al guardar la zona horaria para {user_telegram_id}: {e}", exc_info=True)
+        await query.edit_message_text("Ocurrió un error al guardar tu zona horaria.")
+    context.user_data.clear()
+    return ConversationHandler.END
+
+async def handle_back_to_continents(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Regresa a la selección de continentes."""
+    query = update.callback_query
+    await query.answer()
+    continents = sorted(TIMEZONES_DATA.keys())
+    keyboard = [[InlineKeyboardButton(c, callback_data=f"continent_{c}")] for c in continents]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.edit_message_text("Paso 1/3: Por favor, selecciona tu continente:", reply_markup=reply_markup)
+    return SELECT_CONTINENT
+
+async def handle_back_to_countries(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Regresa a la selección de países (a la primera página)."""
+    query = update.callback_query
+    await query.answer()
+    # Volvemos a mostrar la primera página de países del continente guardado
+    await send_paginated_countries(query, context, page=0)
+    return SELECT_COUNTRY
 
 async def cancel_set_timezone_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Cancela la conversación de configuración de zona horaria."""
-    user_telegram_id = update.effective_user.id
-    logger.info(f"Conversación /set_timezone cancelada por el usuario {user_telegram_id}.")
-    if update.effective_chat:
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text="Configuración de zona horaria cancelada."
-        )
+    """Cancela la conversación."""
+    await update.message.reply_text("Configuración de zona horaria cancelada.")
+    context.user_data.clear()
     return ConversationHandler.END
 
 def get_set_timezone_conversation_handler():
-    """
-    Devuelve el ConversationHandler para manejar la configuración de la zona horaria.
-    """
+    """Crea y devuelve el ConversationHandler con paginación."""
     return ConversationHandler(
         entry_points=[CommandHandler("set_timezone", start_set_timezone_conversation)],
         states={
-            SET_TIMEZONE_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_timezone_input)],
+            SELECT_CONTINENT: [
+                CallbackQueryHandler(handle_continent_selection, pattern="^continent_"),
+            ],
+            SELECT_COUNTRY: [
+                CallbackQueryHandler(handle_country_pagination, pattern="^page_country_"),
+                CallbackQueryHandler(handle_country_selection, pattern="^country_"),
+                CallbackQueryHandler(handle_back_to_continents, pattern="^back_to_continents$"),
+            ],
+            SELECT_TIMEZONE: [
+                CallbackQueryHandler(handle_timezone_selection, pattern="^tz_"),
+                CallbackQueryHandler(handle_back_to_countries, pattern="^back_to_countries_"),
+            ],
         },
         fallbacks=[CommandHandler("cancelar", cancel_set_timezone_conversation)],
     )

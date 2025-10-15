@@ -1,5 +1,3 @@
-# tu_raiz_del_proyecto/src/utils/logger_config.py
-
 import logging
 
 def configure_logging():

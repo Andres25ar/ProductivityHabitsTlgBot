@@ -1,12 +1,9 @@
-# src/bot/productivity_habits_bot.py
-
 import os
 import logging
 from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-
-from telegram import Update, ForceReply
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, ConversationHandler
+from telegram import Update, ForceReply, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, ConversationHandler, CallbackQueryHandler
 
 # Importar funciones de interacción con la base de datos
 from src.database.database_interation import (
@@ -22,6 +19,8 @@ from src.utils.scheduler import (
 from src.utils.logger_config import configure_logging
 from src.handlers.set_timezone_handler import get_set_timezone_conversation_handler 
 from src.handlers.weather_handler import get_weather_conversation_handler
+from src.handlers.habits_handler import get_habits_conversation_handler
+from src.utils.habits_api import send_daily_habits
 
 # Configuración del logger para este módulo
 configure_logging()
@@ -61,6 +60,16 @@ async def post_init(application: Application):
     scheduler_instance = setup_scheduler() 
     await schedule_all_due_tasks_for_persistence() 
     logger.info("post_init: Tareas pendientes y recurrentes programadas en el scheduler.")
+    #para configurar el horario de notificacion de los habitos
+    notification_times = [
+        #esto no esta en el horario del usuario, sino en UTC
+        #hora_utc = hora_arg + 3(horas)
+        time(hour=6, minute=0),
+        time(hour=19, minute=0)
+    ]
+    for notification_time in notification_times:
+        application.job_queue.run_daily(send_daily_habits, time=notification_time)
+        logger.info(f"programada las notificaciones diarias de habitos a las {notification_time.strftime('%H:%M')}.")
     logger.info("post_init: Bot y scheduler listos para operar.")
 
 
@@ -130,7 +139,6 @@ async def received_task_date(update: Update, context: ContextTypes.DEFAULT_TYPE)
     """
     Parsea la fecha de vencimiento ingresada por el usuario y la guarda.
     Luego pide la hora.
-    Añadida validación para `update.message` y `update.message.text`.
     """
     if not update.message or not update.message.text:
         await update.message.reply_text('Por favor, ingresa una fecha válida (Ej: "DD/MM/AAAA" o "ninguna").')
@@ -162,15 +170,14 @@ async def received_task_date(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return TASK_DATE
 
 
+
 async def received_task_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    Parsea la hora de vencimiento ingresada por el usuario, la combina con la fecha
-    y pide la frecuencia.
-    Añadida validación para `update.message` y `update.message.text`.
+    Parsea la hora, la combina con la fecha y presenta un menú de botones para la frecuencia.
     """
     if not update.message or not update.message.text:
         await update.message.reply_text('Por favor, ingresa una hora válida (Ej: "HH:MM" o "ninguna").')
-        return TASK_TIME # Quédate en este estado
+        return TASK_TIME
 
     time_str = update.message.text.lower().strip()
     telegram_user_id = update.effective_user.id
@@ -180,115 +187,95 @@ async def received_task_time(update: Update, context: ContextTypes.DEFAULT_TYPE)
         user = await get_user_by_telegram_id(db, telegram_user_id)
         if not user or not user.timezone:
             await update.message.reply_text(
-                "Por favor, establece tu zona horaria con /set_timezone antes de añadir tareas con fecha. "
-                "Puedes escribir 'ninguna' para continuar sin hora."
+                "Por favor, establece tu zona horaria con /set_timezone antes de añadir tareas con fecha."
             )
             return TASK_TIME
 
-        user_tz = None
-        try:
-            user_tz = ZoneInfo(user.timezone)
-        except ZoneInfoNotFoundError:
-            logger.error(f"Zona horaria inválida '{user.timezone}' para usuario {telegram_user_id}. Usando UTC.")
-            user_tz = ZoneInfo('UTC')
-
+    user_tz = ZoneInfo(user.timezone)
     current_task_date = context.user_data.get('current_task_date')
 
     if time_str == "ninguna":
         if current_task_date:
             parsed_date_time_naive = datetime.combine(current_task_date, time(0, 0))
-            parsed_due_date = parsed_date_time_naive.replace(tzinfo=user_tz)
-            parsed_due_date = parsed_due_date.astimezone(ZoneInfo('UTC'))
-        else:
-            parsed_due_date = None
+            # --- LÍNEA CORREGIDA ---
+            parsed_due_date_aware = parsed_date_time_naive.replace(tzinfo=user_tz)
+            parsed_due_date = parsed_due_date_aware.astimezone(ZoneInfo('UTC'))
     else:
         try:
             parsed_time_naive = datetime.strptime(time_str, '%H:%M').time()
             if current_task_date:
                 parsed_date_time_naive = datetime.combine(current_task_date, parsed_time_naive)
-                parsed_due_date = parsed_date_time_naive.replace(tzinfo=user_tz)
-                parsed_due_date = parsed_due_date.astimezone(ZoneInfo('UTC'))
-            else:
-                now_in_user_tz = datetime.now(user_tz)
-                parsed_date_time_naive = datetime.combine(now_in_user_tz.date(), parsed_time_naive)
-                parsed_due_date = parsed_date_time_naive.replace(tzinfo=user_tz)
-                parsed_due_date = parsed_due_date.astimezone(ZoneInfo('UTC'))
+                # --- LÍNEA CORREGIDA ---
+                parsed_due_date_aware = parsed_date_time_naive.replace(tzinfo=user_tz)
+                parsed_due_date = parsed_due_date_aware.astimezone(ZoneInfo('UTC'))
 
             if parsed_due_date and parsed_due_date < datetime.now(ZoneInfo('UTC')):
-                await update.message.reply_text(
-                    'La fecha y hora proporcionada ya han pasado. Por favor, ingresa una hora futura o "ninguna".'
-                )
+                await update.message.reply_text('La fecha y hora proporcionada ya han pasado. Por favor, ingresa una hora futura.')
                 return TASK_TIME
-
         except ValueError:
-            await update.message.reply_text(
-                'Formato de hora inválido. Por favor, usa "HH:MM" (ej: "18:00") o escribe "ninguna".'
-            )
-            return TASK_TIME
-        except Exception as e:
-            logger.error(f"Error al parsear hora '{time_str}' para el usuario {telegram_user_id}: {e}", exc_info=True)
-            await update.message.reply_text(
-                'Ocurrió un error al procesar la hora. Por favor, intenta con el formato "HH:MM" o escribe "ninguna".'
-            )
+            await update.message.reply_text('Formato de hora inválido. Usa "HH:MM" (ej: "18:00").')
             return TASK_TIME
 
     context.user_data['current_task_due_date'] = parsed_due_date
-    await update.message.reply_text('¿Con qué frecuencia debe repetirse esta tarea? (Ej: "diaria", "semanal", "mensual", "anual", "una vez" o "ninguna"):')
+
+    # ---  MENU DE BOTONES ---
+    keyboard = [
+        [InlineKeyboardButton("Una sola vez", callback_data="freq_una vez")],
+        [InlineKeyboardButton("Diaria", callback_data="freq_diaria")],
+        [InlineKeyboardButton("Semanal", callback_data="freq_semanal")],
+        [InlineKeyboardButton("Mensual", callback_data="freq_mensual")],
+        [InlineKeyboardButton("Anual", callback_data="freq_anual")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text('¿Con qué frecuencia debe repetirse?', reply_markup=reply_markup)
+
     return TASK_FREQUENCY
+
 
 async def received_task_frequency(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    Guarda la frecuencia de la tarea, crea la tarea en la base de datos y la programa.
+    Recibe la frecuencia desde el botón, crea la tarea en la DB y la programa.
     """
-    frequency_str = update.message.text.lower().strip()
-    frequency = None 
+    query = update.callback_query
+    await query.answer()
 
-    valid_frequencies = ["ninguna", "diaria", "semanal", "mensual", "anual", "una vez"]
-    if frequency_str not in valid_frequencies:
-        await update.message.reply_text(f'Frecuencia no reconocida. Por favor, usa una de las siguientes: {", ".join(valid_frequencies)}.')
-        return TASK_FREQUENCY 
+    # Extrae la frecuencia del callback_data (ej. "freq_diaria" -> "diaria")
+    frequency_str = query.data.split('_', 1)[1]
 
-    if frequency_str == "ninguna":
-        frequency = None
-    elif frequency_str == "una vez":
-        frequency = "una vez"
-    else:
-        frequency = frequency_str
+    await query.edit_message_text(f"Frecuencia seleccionada: {frequency_str.capitalize()}. Creando tarea...")
 
-    telegram_user_id = update.effective_user.id
+    frequency = None if frequency_str in ["una vez", "ninguna"] else frequency_str
+
+    telegram_user_id = query.from_user.id
     description = context.user_data['current_task_description']
-    due_date = context.user_data['current_task_due_date']
+    due_date = context.user_data.get('current_task_due_date')
 
     try:
         async with get_db() as db:
             user = await get_user_by_telegram_id(db, telegram_user_id)
             if not user:
-                await update.message.reply_text("Error interno: No se pudo encontrar tu información de usuario. Por favor, intenta /start de nuevo.")
-                logger.error(f"Usuario con Telegram ID {telegram_user_id} no encontrado en la DB al intentar crear tarea.")
-                return ConversationHandler.END 
+                await query.message.reply_text("Error: No se encontró tu usuario. Usa /start.")
+                return ConversationHandler.END
 
             task = await set_task(db, user.id, description, due_date, frequency)
-        
-        await update.message.reply_text(f'Tarea "{task.description}" (ID: `{task.id}`) creada exitosamente.')
-        logger.info(f"Tarea '{task.description}' (ID: {task.id}) creada por el usuario {telegram_user_id}.")
 
-        if task.due_date and (task.frequency != "ninguna" or task.frequency is not None):
-            if task.frequency is None or task.frequency == 'una vez':
+        await query.message.reply_text(f'Tarea "{task.description}" (ID: `{task.id}`) creada exitosamente.')
+        logger.info(f"Tarea '{task.description}' (ID: {task.id}) creada por {telegram_user_id}.")
+
+        if task.due_date:
+            if not task.frequency or task.frequency == 'una vez':
                 await schedule_instant_reminder(task.id)
             elif task.frequency in ['diaria', 'semanal', 'mensual', 'anual']:
                 await schedule_recurring_task(task.id, task.frequency)
-            else:
-                logger.warning(f"La tarea {task.id} con frecuencia '{task.frequency}' no pudo ser programada por el scheduler.")
-        else:
-            await update.message.reply_text("Esta tarea no tendrá un recordatorio programado porque no se especificó una fecha o la frecuencia es 'ninguna'.")
-            logger.info(f"Tarea {task.id} creada sin fecha de vencimiento o con frecuencia 'ninguna', no se programa recordatorio.")
 
-        context.user_data.clear()
-        return ConversationHandler.END 
     except Exception as e:
-        logger.error(f"Error al crear y programar la tarea para el usuario {telegram_user_id}: {e}", exc_info=True)
-        await update.message.reply_text('Lo siento, ocurrió un error al crear la tarea. Por favor, inténtalo de nuevo.')
-        return ConversationHandler.END 
+        logger.error(f"Error al crear tarea para {telegram_user_id}: {e}", exc_info=True)
+        await query.message.reply_text('Lo siento, ocurrió un error al crear la tarea.')
+
+    finally:
+        context.user_data.clear()
+
+    return ConversationHandler.END
 
 
 async def list_tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -521,10 +508,7 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     return ConversationHandler.END 
 
 def main() -> None:
-    """
-    Función principal para iniciar el bot de Telegram.
-    Configura la aplicación, añade los manejadores de comandos y conversaciones, y ejecuta el polling.
-    """
+    #Función principal para iniciar el bot de Telegram. Configura la aplicación
     logger.info("Iniciando la aplicación principal del bot...")
     
     token = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -542,15 +526,16 @@ def main() -> None:
     application.add_handler(get_set_timezone_conversation_handler())
 
     new_task_conv_handler = ConversationHandler(
-        entry_points=[CommandHandler('task', new_task_command)], 
+        entry_points=[CommandHandler('task', new_task_command)],
         states={
             TASK_DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, received_task_description)],
             TASK_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, received_task_date)],
             TASK_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, received_task_time)],
-            TASK_FREQUENCY: [MessageHandler(filters.TEXT & ~filters.COMMAND, received_task_frequency)],
+            TASK_FREQUENCY: [CallbackQueryHandler(received_task_frequency, pattern="^freq_")],
         },
-        fallbacks=[CommandHandler('cancelar', global_cancel_command)], 
+        fallbacks=[CommandHandler('cancelar', global_cancel_command)],
     )
+
     application.add_handler(new_task_conv_handler) 
 
     application.add_handler(CommandHandler("list_tasks", list_tasks_command))
@@ -572,6 +557,8 @@ def main() -> None:
         fallbacks=[CommandHandler('cancelar', global_cancel_command)], 
     )
     application.add_handler(delete_task_conv_handler)
+
+    application.add_handler(get_habits_conversation_handler())
 
     application.add_handler(get_weather_conversation_handler())
 

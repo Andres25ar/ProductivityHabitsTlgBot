@@ -1,14 +1,12 @@
-# src/handlers/user_handler.py
-
 import logging
 from telegram import Update
 from telegram.ext import ContextTypes, ConversationHandler
-from src.database.db_context import get_db # Importa get_db desde db_context
-import pytz # Necesario para la validación de zona horaria
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError # Necesario para validar zonas horarias
+from src.database.db_context import get_db
+import pytz
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 # Importar las funciones de base de datos correctas
-from src.database.database_interation import add_user, get_user, update_user_timezone # Usamos add_user, get_user y update_user_timezone
+from src.database.database_interation import add_user, get_user, update_user_timezone
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +98,7 @@ async def _process_timezone_input(update: Update, context: ContextTypes.DEFAULT_
                 if updated_user:
                     logger.info(f"Zona horaria del usuario {user_telegram_id} actualizada a {timezone_str}.")
                     await update.message.reply_text(
-                        f"✅ ¡Listo! Tu zona horaria ha sido establecida a `{timezone_str}`.\n"
+                        f"✅ ¡Listo! Tu zona horaria ha sido establecida a {timezone_str}.\n"
                         "A partir de ahora, los recordatorios y tareas se ajustarán a esta zona horaria."
                     )
                 else:

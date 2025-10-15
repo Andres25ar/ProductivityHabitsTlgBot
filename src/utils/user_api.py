@@ -1,5 +1,3 @@
-# src/utils/user_api.py
-
 import logging
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError

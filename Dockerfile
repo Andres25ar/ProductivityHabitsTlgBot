@@ -13,10 +13,6 @@ COPY init.sh .
 COPY wait-for-it.sh .
 RUN chmod +x init.sh wait-for-it.sh
 
-# ***** LÍNEA ELIMINADA: NO COPIAR .env en la imagen de Docker *****
-# COPY .env . 
-# ******************************************************************
-
 # Copia el resto del código de la aplicación
 COPY . .
 
@@ -24,4 +20,4 @@ COPY . .
 ENV PYTHONPATH=/app
 
 # Define el comando que se ejecutará cuando el contenedor se inicie
-CMD ["./init.sh"]
+CMD ["bash", "./init.sh"]

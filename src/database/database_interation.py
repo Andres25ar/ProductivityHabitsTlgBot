@@ -1,12 +1,10 @@
-# src/database/database_interation.py
-
 import logging
 from datetime import datetime
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError # Importar ZoneInfo y ZoneInfoNotFoundError
-from sqlalchemy import text # Asegúrate de importar 'text' si lo usas en alguna función
-from sqlalchemy.future import select # Para consultas asíncronas de SQLAlchemy 2.0
-from sqlalchemy.ext.asyncio import AsyncSession # Importar AsyncSession para tipado
-from sqlalchemy.orm import joinedload # <--- ¡IMPORTANTE: Importar joinedload para carga ansiosa!
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from sqlalchemy import text
+from sqlalchemy.future import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
 
 # Importar el SessionLocal asíncrono, el motor, y AHORA TAMBIÉN init_db_async desde db_context.py
 from src.database.db_context import AsyncSessionLocal, engine, init_db_async
@@ -338,3 +336,51 @@ async def complete_task_by_id(db: AsyncSession, task_id: int) -> bool:
         await db.rollback() # await para operaciones asíncronas
         db_logger.error(f"Error al marcar como completada la tarea con ID {task_id}: {e}", exc_info=True)
         raise
+
+
+# Inserta este bloque de código en src/database/database_interation.py
+
+async def get_all_users(db: AsyncSession) -> list[User]:
+    """Obtiene todos los usuarios de la base de datos."""
+    db_logger.debug("[DB] Obteniendo todos los usuarios.")
+    result = await db.execute(select(User))
+    users = result.scalars().all()
+    db_logger.info(f"[DB] Encontrados {len(users)} usuarios.")
+    return users
+
+async def get_habits(db: AsyncSession, habit_id: int = None) -> list[DefaultHabit]:
+    """Obtiene todos los hábitos por defecto o uno específico por ID."""
+    if habit_id:
+        db_logger.debug(f"[DB] Obteniendo hábito por defecto con ID: {habit_id}")
+        result = await db.execute(select(DefaultHabit).filter(DefaultHabit.id == habit_id))
+        habit = result.scalar_one_or_none()
+        return [habit] if habit else []
+    else:
+        db_logger.debug("[DB] Obteniendo todos los hábitos por defecto.")
+        result = await db.execute(select(DefaultHabit))
+        habits = result.scalars().all()
+        return habits
+
+async def get_user_habits(db: AsyncSession, user_id: int) -> list[UserHabit]:
+    """Obtiene los hábitos asociados a un usuario."""
+    db_logger.debug(f"[DB] Obteniendo hábitos para el usuario con ID: {user_id}")
+    result = await db.execute(select(UserHabit).filter(UserHabit.user_id == user_id))
+    return result.scalars().all()
+
+async def add_user_habit(db: AsyncSession, user_id: int, habit_id: int) -> UserHabit | None:
+    """Añade un hábito a la lista de un usuario."""
+    db_logger.info(f"Añadiendo hábito {habit_id} al usuario {user_id}")
+    # Verificar si el usuario ya tiene ese hábito
+    existing_habit_result = await db.execute(select(UserHabit).filter_by(user_id=user_id, habit_id=habit_id))
+    if existing_habit_result.scalar_one_or_none():
+        db_logger.warning(f"El usuario {user_id} ya tiene el hábito {habit_id}.")
+        return None # Devuelve None si el hábito ya existe para ese usuario
+
+    new_user_habit = UserHabit(user_id=user_id, habit_id=habit_id)
+    db.add(new_user_habit)
+    await db.commit()
+    await db.refresh(new_user_habit)
+    db_logger.info(f"Hábito {habit_id} añadido exitosamente al usuario {user_id}.")
+    return new_user_habit
+
+
