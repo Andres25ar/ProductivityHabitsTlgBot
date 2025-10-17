@@ -18,8 +18,6 @@ A bot for managing smart habits and personal productivity.
 - [Technologies Used](#-technologies-used)
 - [ProductivityHabitsTlgBot (Español)](#productivityhabitstlgbot-español)
 
-</details>
-
 ---
 
 <h2 align="center">🚀 Overview</h2>
@@ -30,17 +28,21 @@ A bot for managing smart habits and personal productivity.
 
 <h2 align="center">✨ Key Features & Functionalities</h2>
 
-- **User Registration & Timezone Configuration**: New users can easily onboard and set their specific timezones to ensure reminders are always punctual and locally relevant.
+- **Intuitive User Onboarding**:
+    - **User Registration**: Seamlessly registers new users upon first interaction.
+    - **Interactive Timezone Configuration**: Guides users through a paginated, multi-step menu (Continent -> Country -> City) to set their timezone, ensuring reminders are always punctual and locally relevant.
 
-- **Dynamic Task Management**:
-    - **Create Tasks**: Quickly add new tasks with descriptions, due dates, and customizable frequencies (one-time, daily, weekly, monthly, annually).
-    - **List Tasks**: View all your pending tasks at a glance.
-    - **Complete Tasks**: Mark tasks as completed, with intelligent handling for recurring vs. one-time tasks.
-    - **Delete Tasks**: Remove unwanted tasks from your list.
+- **Dynamic Task & Habit Management**:
+    - **Create Tasks**: Quickly add new tasks with descriptions and due dates. Frequency (one-time, daily, weekly, etc.) is selected via an interactive button menu to minimize errors.
+    - **Manage Habits**: Users can subscribe to a list of predefined habits to receive periodic reminders.
+    - **List & Modify**: View all pending tasks, and mark one-time tasks as complete or delete any task.
 
-- **Smart Reminders**: Leverages **APScheduler** to provide timely notifications for all your scheduled tasks, adapting to your configured timezone.
+- **Smart, Timezone-Aware Reminders**:
+    - Leverages **APScheduler** to provide timely notifications for all scheduled tasks and habits.
+    - All reminders are fully adapted to each user's configured timezone.
+    - Habit notifications can be scheduled for multiple times per day.
 
-- **Database Persistence**: Utilizes **PostgreSQL** to ensure all your tasks and preferences are securely stored and persist across bot restarts.
+- **Database Persistence**: Utilizes **PostgreSQL** to ensure all user data, tasks, and habit subscriptions are securely stored and persist across bot restarts.
 
 - **Modular & Scalable Architecture**: Designed with a clear separation of concerns (handlers, database interactions, utilities) to facilitate future expansions and maintenance.
 
@@ -50,12 +52,23 @@ A bot for managing smart habits and personal productivity.
 
 **ProductivityHabitsTlgBot** is more than just a task manager; it's a foundation for a powerful personal assistant. Its potential can be expanded to include:
 
-- **Habit Tracking & Analytics**: Deeper integration of habit tracking with progress visualization and analytical reports (e.g., streaks, completion rates).
-- **Goal Setting**: Features to define and track larger goals broken down into smaller tasks.
-- **Integration with External Services**: Connect with calendars (Google Calendar, Outlook), note-taking apps, or other productivity tools.
-- **AI-Powered Suggestions**: Proactive suggestions for tasks, habits, or scheduling optimization based on user behavior.
-- **Team Collaboration**: Extend functionality for small team task management and shared habits.
-- **Gamification**: Introduce points, badges, or leaderboards to make productivity more engaging.
+- **Enhanced User Interaction**:
+    - **Natural Language for Dates**: Implement `dateparser` to allow users to set task deadlines with phrases like "tomorrow at 10am" or "next Friday".
+    - **Interactive Calendar**: Add a calendar keyboard as an alternative for visual date selection.
+    - **Granular Notifications**: Allow users to unsubscribe from individual habit reminders via an inline button.
+
+- **Advanced Habit & Task Features**:
+    - **Habit Tracking & Analytics**: Deeper integration of habit tracking with progress visualization and analytical reports (e.g., streaks, completion rates).
+    - **Custom Habits**: Allow users to create their own custom habits instead of only subscribing to predefined ones.
+    - **Goal Setting**: Features to define and track larger goals broken down into smaller, actionable tasks.
+
+- **Integrations and AI**:
+    - **Integration with External Services**: Connect with calendars (Google Calendar, Outlook) or note-taking apps.
+    - **AI-Powered Suggestions**: Proactive suggestions for tasks or scheduling optimization based on user behavior.
+
+- **Community & Gamification**:
+    - **Team Collaboration**: Extend functionality for small team task management and shared habits.
+    - **Gamification**: Introduce points, badges, or leaderboards to make productivity more engaging.
 
 ---
 
@@ -91,8 +104,6 @@ Un bot para gestionar hábitos inteligentes y la productividad personal.
 - [Potencialidades](#-potencialidades)
 - [Tecnologías Utilizadas](#-tecnologías-utilizadas)
 
-</details>
-
 ---
 
 <h2 align="center">🚀 Resumen</h2>
@@ -103,17 +114,21 @@ Un bot para gestionar hábitos inteligentes y la productividad personal.
 
 <h2 align="center">✨ Características y Funcionalidades Clave</h2>
 
-- **Registro de Usuario y Configuración de Zona Horaria**: Los nuevos usuarios pueden registrarse fácilmente y configurar sus zonas horarias específicas para asegurar que los recordatorios sean siempre puntuales y relevantes a su ubicación.
+- **Registro de Usuario Intuitivo**:
+    - **Registro de Usuario**: Registra a los nuevos usuarios de forma transparente en su primera interacción.
+    - **Configuración de Zona Horaria Interactiva**: Guía a los usuarios a través de un menú paginado de varios pasos (Continente -> País -> Ciudad) para configurar su zona horaria, asegurando que los recordatorios sean siempre puntuales.
 
-- **Gestión Dinámica de Tareas**:
-    - **Crear Tareas**: Añade rápidamente nuevas tareas con descripciones, fechas de vencimiento y frecuencias personalizables (una vez, diaria, semanal, mensual, anual).
-    - **Listar Tareas**: Visualiza todas tus tareas pendientes de un vistazo.
-    - **Completar Tareas**: Marca las tareas como completadas, con un manejo inteligente para tareas recurrentes versus únicas.
-    - **Eliminar Tareas**: Borra tareas no deseadas de tu lista.
+- **Gestión Dinámica de Tareas y Hábitos**:
+    - **Crear Tareas**: Añade rápidamente nuevas tareas con descripciones y fechas de vencimiento. La frecuencia (una vez, diaria, semanal, etc.) se selecciona mediante un menú de botones interactivo para minimizar errores.
+    - **Gestión de Hábitos**: Los usuarios pueden suscribirse a una lista de hábitos predefinidos para recibir recordatorios periódicos.
+    - **Listar y Modificar**: Visualiza todas las tareas pendientes, y marca las tareas de única vez como completadas o elimina cualquier tarea.
 
-- **Recordatorios Inteligentes**: Aprovecha **APScheduler** para proporcionar notificaciones a tiempo para todas tus tareas programadas, adaptándose a tu zona horaria configurada.
+- **Recordatorios Inteligentes y Conscientes de la Zona Horaria**:
+    - Aprovecha **APScheduler** para proporcionar notificaciones a tiempo para todas las tareas y hábitos programados.
+    - Todos los recordatorios se adaptan completamente a la zona horaria configurada por cada usuario.
+    - Las notificaciones de hábitos pueden ser programadas para múltiples horas del día.
 
-- **Persistencia de Datos**: Utiliza **PostgreSQL** para asegurar que todas tus tareas y preferencias se almacenen de forma segura y persistan a través de los reinicios del bot.
+- **Persistencia de Datos**: Utiliza **PostgreSQL** para asegurar que todos los datos de usuario, tareas y suscripciones a hábitos se almacenen de forma segura y persistan a través de los reinicios del bot.
 
 - **Arquitectura Modular y Escalable**: Diseñado con una clara separación de responsabilidades (manejadores, interacciones con la base de datos, utilidades) para facilitar futuras expansiones y el mantenimiento.
 
@@ -123,12 +138,23 @@ Un bot para gestionar hábitos inteligentes y la productividad personal.
 
 **ProductivityHabitsTlgBot** es más que un simple gestor de tareas; es la base para un potente asistente personal. Su potencial puede expandirse para incluir:
 
-- **Seguimiento y Análisis de Hábitos**: Integración más profunda del seguimiento de hábitos con visualización del progreso e informes analíticos (ej. rachas, tasas de finalización).
-- **Establecimiento de Metas**: Funcionalidades para definir y seguir metas más grandes desglosadas en tareas más pequeñas.
-- **Integración con Servicios Externos**: Conexión con calendarios (Google Calendar, Outlook), aplicaciones de toma de notas u otras herramientas de productividad.
-- **Sugerencias Impulsadas por IA**: Sugerencias proactivas de tareas, hábitos u optimización de horarios basadas en el comportamiento del usuario.
-- **Colaboración en Equipo**: Extensión de la funcionalidad para la gestión de tareas de equipos pequeños y hábitos compartidos.
-- **Gamificación**: Introducción de puntos, insignias o tablas de clasificación para hacer la productividad más atractiva.
+- **Interacción de Usuario Mejorada**:
+    - **Lenguaje Natural para Fechas**: Implementar `dateparser` para permitir a los usuarios establecer fechas límite con frases como "mañana a las 10am" o "el próximo viernes".
+    - **Calendario Interactivo**: Añadir un teclado de calendario como alternativa visual para la selección de fechas.
+    - **Notificaciones Granulares**: Permitir a los usuarios darse de baja de recordatorios de hábitos individuales a través de un botón.
+
+- **Funcionalidades Avanzadas de Hábitos y Tareas**:
+    - **Seguimiento y Análisis de Hábitos**: Integración más profunda del seguimiento de hábitos con visualización del progreso e informes analíticos (ej. rachas, tasas de finalización).
+    - **Hábitos Personalizados**: Permitir a los usuarios crear sus propios hábitos en lugar de solo suscribirse a los predefinidos.
+    - **Establecimiento de Metas**: Funcionalidades para definir y seguir metas más grandes desglosadas en tareas más pequeñas.
+
+- **Integraciones e IA**:
+    - **Integración con Servicios Externos**: Conexión con calendarios (Google Calendar, Outlook) o aplicaciones de toma de notas.
+    - **Sugerencias Impulsadas por IA**: Sugerencias proactivas de tareas u optimización de horarios basadas en el comportamiento del usuario.
+
+- **Comunidad y Gamificación**:
+    - **Colaboración en Equipo**: Extensión de la funcionalidad para la gestión de tareas de equipos pequeños y hábitos compartidos.
+    - **Gamificación**: Introducción de puntos, insignias o tablas de clasificación para hacer la productividad más atractiva.
 
 ---
 
